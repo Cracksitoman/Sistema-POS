@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Store, Box, UtensilsCrossed, BarChart3 } from 'lucide-react';
-import { PRODUCTS } from './constants';
+import { Store, Box, UtensilsCrossed, BarChart3, RefreshCw } from 'lucide-react';
+import { supabase } from './lib/supabase';
 import { Product, CartItem, Sale, PaymentMethod, Expense } from './types';
 import PosView from './components/PosView';
 import InventoryView from './components/InventoryView';
@@ -8,179 +8,274 @@ import SalesStatsView from './components/SalesStatsView';
 
 type View = 'pos' | 'inventory' | 'stats';
 
-const STORAGE_KEY_PRODUCTS = 'fastpos_products';
-const STORAGE_KEY_SALES = 'fastpos_sales';
-const STORAGE_KEY_EXPENSES = 'fastpos_expenses';
 const STORAGE_KEY_RATE = 'fastpos_exchange_rate';
-
-// API Endpoint for BCV rate
-// Using ve.dolarapi.com as it's stable, free, and CORS-friendly
 const BCV_API_URL = 'https://ve.dolarapi.com/v1/dolares/oficial';
 
 const App: React.FC = () => {
   const [currentView, setCurrentView] = useState<View>('pos');
+  const [isSyncing, setIsSyncing] = useState(false);
   
-  // --- Exchange Rate State ---
+  // --- Exchange Rate State (Keep in LocalStorage for speed/offline mostly) ---
   const [exchangeRate, setExchangeRate] = useState<number>(() => {
     const savedRate = localStorage.getItem(STORAGE_KEY_RATE);
-    return savedRate ? parseFloat(savedRate) : 45.00; // Default fallback
+    return savedRate ? parseFloat(savedRate) : 45.00;
   });
   const [isLoadingRate, setIsLoadingRate] = useState(false);
 
-  // Fetch Rate Function
+  // --- Data States ---
+  const [products, setProducts] = useState<Product[]>([]);
+  const [salesHistory, setSalesHistory] = useState<Sale[]>([]);
+  const [expenses, setExpenses] = useState<Expense[]>([]);
+
+  // --- Initial Data Load from Supabase ---
+  const fetchAllData = useCallback(async () => {
+    setIsSyncing(true);
+    try {
+      // 1. Fetch Products
+      const { data: productsData, error: productsError } = await supabase
+        .from('products')
+        .select('*')
+        .order('name');
+      
+      if (productsError) throw productsError;
+      if (productsData) setProducts(productsData);
+
+      // 2. Fetch Sales (Last 100 for performance, or filter by date needed)
+      const { data: salesData, error: salesError } = await supabase
+        .from('sales')
+        .select('*')
+        .order('date', { ascending: false })
+        .limit(200);
+
+      if (salesError) throw salesError;
+      if (salesData) {
+        // Map database columns to our TS interface if needed (snake_case to camelCase is automatic often but let's be safe)
+        const mappedSales = salesData.map((s: any) => ({
+          id: s.id,
+          date: s.date,
+          items: s.items, // JSONB column
+          total: s.total,
+          paymentMethod: s.payment_method,
+          exchangeRate: s.exchange_rate
+        }));
+        setSalesHistory(mappedSales);
+      }
+
+      // 3. Fetch Expenses
+      const { data: expensesData, error: expensesError } = await supabase
+        .from('expenses')
+        .select('*')
+        .order('date', { ascending: false })
+        .limit(200);
+
+      if (expensesError) throw expensesError;
+      if (expensesData) setExpenses(expensesData);
+
+    } catch (error) {
+      console.error('Error fetching data from Supabase:', error);
+    } finally {
+      setIsSyncing(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    // Check if credentials exist before trying to fetch
+    const meta = import.meta as any;
+    const url = meta?.env?.VITE_SUPABASE_URL;
+    
+    if (url) {
+      fetchAllData();
+    } else {
+      console.warn("Supabase credentials missing. App running in offline mode (empty data).");
+    }
+  }, [fetchAllData]);
+
+
+  // --- Exchange Rate Logic ---
   const fetchBCVRate = useCallback(async () => {
     setIsLoadingRate(true);
     try {
       const response = await fetch(BCV_API_URL);
       if (!response.ok) throw new Error('Network response was not ok');
       const data = await response.json();
-      
-      // Parse logic for DolarAPI (returns 'promedio' or 'price')
       let rate = 0;
-      
-      if (data?.promedio) {
-        rate = Number(data.promedio);
-      } else if (data?.price) {
-        rate = Number(data.price);
-      }
+      if (data?.promedio) rate = Number(data.promedio);
+      else if (data?.price) rate = Number(data.price);
 
-      if (rate > 0) {
-        setExchangeRate(rate);
-      } else {
-        console.warn('Could not parse rate from API, using current local rate');
-      }
+      if (rate > 0) setExchangeRate(rate);
     } catch (error) {
       console.error('Error fetching BCV rate:', error);
-      // We do not reset the rate to 0 on error, we keep the last known good rate
     } finally {
       setIsLoadingRate(false);
     }
   }, []);
 
-  // Initial Fetch
-  useEffect(() => {
-    fetchBCVRate();
-  }, [fetchBCVRate]);
-
-  // Save Rate persistence
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEY_RATE, exchangeRate.toString());
-  }, [exchangeRate]);
-
-  // Manual Update handler
-  const handleUpdateExchangeRate = (newRate: number) => {
-    setExchangeRate(newRate);
-  };
+  useEffect(() => { fetchBCVRate(); }, [fetchBCVRate]);
+  useEffect(() => { localStorage.setItem(STORAGE_KEY_RATE, exchangeRate.toString()); }, [exchangeRate]);
+  const handleUpdateExchangeRate = (newRate: number) => setExchangeRate(newRate);
 
 
-  // --- Products State (Load/Save) ---
-  const [products, setProducts] = useState<Product[]>(() => {
+  // --- Inventory Actions (Supabase) ---
+  const handleAddProduct = async (newProductData: Omit<Product, 'id'>) => {
+    // Optimistic Update
+    const tempId = Date.now().toString();
+    const tempProduct = { ...newProductData, id: tempId };
+    setProducts(prev => [...prev, tempProduct]);
+
     try {
-      const savedProducts = localStorage.getItem(STORAGE_KEY_PRODUCTS);
-      if (savedProducts) {
-        return JSON.parse(savedProducts);
+      const { data, error } = await supabase
+        .from('products')
+        .insert([{
+          name: newProductData.name,
+          price: newProductData.price,
+          category: newProductData.category
+        }])
+        .select()
+        .single();
+
+      if (error) throw error;
+      
+      // Replace temp product with real DB product
+      if (data) {
+        setProducts(prev => prev.map(p => p.id === tempId ? data : p));
       }
-    } catch (error) {
-      console.error('Error loading products from localStorage:', error);
+    } catch (err) {
+      console.error("Error adding product:", err);
+      // Rollback on error
+      setProducts(prev => prev.filter(p => p.id !== tempId));
+      alert("Error al guardar en la base de datos.");
     }
-    return PRODUCTS;
-  });
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_KEY_PRODUCTS, JSON.stringify(products));
-    } catch (error) {
-      console.error('Error saving products to localStorage:', error);
-    }
-  }, [products]);
-
-  // --- Sales History State (Load/Save) ---
-  const [salesHistory, setSalesHistory] = useState<Sale[]>(() => {
-    try {
-      const savedSales = localStorage.getItem(STORAGE_KEY_SALES);
-      if (savedSales) {
-        return JSON.parse(savedSales);
-      }
-    } catch (error) {
-      console.error('Error loading sales from localStorage:', error);
-    }
-    return [];
-  });
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_KEY_SALES, JSON.stringify(salesHistory));
-    } catch (error) {
-      console.error('Error saving sales to localStorage:', error);
-    }
-  }, [salesHistory]);
-
-  // --- Expenses State (Load/Save) ---
-  const [expenses, setExpenses] = useState<Expense[]>(() => {
-    try {
-      const savedExpenses = localStorage.getItem(STORAGE_KEY_EXPENSES);
-      if (savedExpenses) {
-        return JSON.parse(savedExpenses);
-      }
-    } catch (error) {
-      console.error('Error loading expenses from localStorage:', error);
-    }
-    return [];
-  });
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_KEY_EXPENSES, JSON.stringify(expenses));
-    } catch (error) {
-      console.error('Error saving expenses to localStorage:', error);
-    }
-  }, [expenses]);
-
-
-  // --- Inventory Actions ---
-  const handleAddProduct = (newProductData: Omit<Product, 'id'>) => {
-    const newProduct: Product = {
-      ...newProductData,
-      id: Date.now().toString(),
-    };
-    setProducts((prev) => [...prev, newProduct]);
   };
 
-  const handleUpdateProduct = (updatedProduct: Product) => {
-    setProducts((prev) => 
-      prev.map((p) => p.id === updatedProduct.id ? updatedProduct : p)
-    );
+  const handleUpdateProduct = async (updatedProduct: Product) => {
+    // Optimistic
+    setProducts(prev => prev.map(p => p.id === updatedProduct.id ? updatedProduct : p));
+
+    try {
+      const { error } = await supabase
+        .from('products')
+        .update({
+          name: updatedProduct.name,
+          price: updatedProduct.price,
+          category: updatedProduct.category
+        })
+        .eq('id', updatedProduct.id);
+
+      if (error) throw error;
+    } catch (err) {
+      console.error("Error updating product:", err);
+      fetchAllData(); // Revert to server state
+    }
   };
 
-  const handleDeleteProduct = (id: string) => {
-    setProducts((prev) => prev.filter((p) => p.id !== id));
+  const handleDeleteProduct = async (id: string) => {
+    // Optimistic
+    const backup = products;
+    setProducts(prev => prev.filter(p => p.id !== id));
+
+    try {
+      const { error } = await supabase
+        .from('products')
+        .delete()
+        .eq('id', id);
+
+      if (error) throw error;
+    } catch (err) {
+      console.error("Error deleting product:", err);
+      setProducts(backup);
+    }
   };
 
-  // --- POS Actions ---
-  const handleCheckout = (items: CartItem[], total: number, paymentMethod: PaymentMethod) => {
-    const newSale: Sale = {
+  // --- POS Actions (Supabase) ---
+  const handleCheckout = async (items: CartItem[], total: number, paymentMethod: PaymentMethod) => {
+    const newSaleTemp: Sale = {
       id: Date.now().toString(),
       date: new Date().toISOString(),
-      items: items,
-      total: total,
-      paymentMethod: paymentMethod,
-      exchangeRate: exchangeRate
+      items,
+      total,
+      paymentMethod,
+      exchangeRate
     };
-    setSalesHistory((prev) => [...prev, newSale]);
+
+    // Optimistic
+    setSalesHistory(prev => [newSaleTemp, ...prev]);
+
+    try {
+      const { data, error } = await supabase
+        .from('sales')
+        .insert([{
+          items: items, // Sending the JSON array directly
+          total: total,
+          payment_method: paymentMethod,
+          exchange_rate: exchangeRate,
+          date: new Date().toISOString()
+        }])
+        .select()
+        .single();
+
+      if (error) throw error;
+
+      if (data) {
+        // Update the temporary ID with the real one from DB
+         setSalesHistory(prev => prev.map(s => s.id === newSaleTemp.id ? {
+           ...s, 
+           id: data.id, 
+           date: data.date 
+         } : s));
+      }
+    } catch (err) {
+      console.error("Error recording sale:", err);
+      alert("Hubo un error guardando la venta. Verifique conexión.");
+    }
   };
 
-  // --- Expense Actions ---
-  const handleAddExpense = (expenseData: Omit<Expense, 'id' | 'date'>) => {
-    const newExpense: Expense = {
+  // --- Expense Actions (Supabase) ---
+  const handleAddExpense = async (expenseData: Omit<Expense, 'id' | 'date'>) => {
+    const tempExpense: Expense = {
       ...expenseData,
       id: Date.now().toString(),
       date: new Date().toISOString(),
     };
-    setExpenses((prev) => [...prev, newExpense]);
+    
+    setExpenses(prev => [tempExpense, ...prev]);
+
+    try {
+      const { data, error } = await supabase
+        .from('expenses')
+        .insert([{
+          amount: expenseData.amount,
+          description: expenseData.description,
+          category: expenseData.category,
+          date: new Date().toISOString()
+        }])
+        .select()
+        .single();
+
+      if (error) throw error;
+      if (data) {
+        setExpenses(prev => prev.map(e => e.id === tempExpense.id ? data : e));
+      }
+    } catch (err) {
+      console.error("Error adding expense:", err);
+      setExpenses(prev => prev.filter(e => e.id !== tempExpense.id));
+    }
   };
 
-  const handleDeleteExpense = (id: string) => {
-    setExpenses((prev) => prev.filter(e => e.id !== id));
+  const handleDeleteExpense = async (id: string) => {
+    const backup = expenses;
+    setExpenses(prev => prev.filter(e => e.id !== id));
+
+    try {
+      const { error } = await supabase
+        .from('expenses')
+        .delete()
+        .eq('id', id);
+      
+      if (error) throw error;
+    } catch (err) {
+      console.error("Error deleting expense:", err);
+      setExpenses(backup);
+    }
   };
 
   // --- Navigation Helper ---
@@ -202,7 +297,7 @@ const App: React.FC = () => {
     <div className="flex h-screen w-full flex-col overflow-hidden bg-dark-950 text-zinc-100 md:flex-row">
       
       {/* DESKTOP SIDEBAR NAV */}
-      <nav className="hidden w-20 flex-col items-center border-r border-dark-800 bg-dark-950 py-6 md:flex">
+      <nav className="hidden w-20 flex-col items-center border-r border-dark-800 bg-dark-950 py-6 md:flex relative">
         <div className="mb-8 flex h-10 w-10 items-center justify-center rounded-xl bg-primary text-white shadow-lg shadow-primary/20">
           <UtensilsCrossed size={20} />
         </div>
@@ -228,6 +323,11 @@ const App: React.FC = () => {
             </div>
             <span className="text-[10px] font-medium">Stats</span>
           </button>
+        </div>
+
+        {/* Sync Indicator */}
+        <div className="absolute bottom-6 flex justify-center w-full">
+           <div title={isSyncing ? "Sincronizando..." : "Conectado"} className={`h-2 w-2 rounded-full ${isSyncing ? 'bg-yellow-500 animate-pulse' : 'bg-green-500'}`} />
         </div>
       </nav>
 
