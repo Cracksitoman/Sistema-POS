@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Product } from '../types';
-import { Search, Plus, Pencil, Trash2, X, Save, AlertTriangle, ArrowRightLeft } from 'lucide-react';
+import { Search, Plus, Pencil, Trash2, X, Save, AlertTriangle, ArrowRightLeft, Database } from 'lucide-react';
 import { formatCurrency } from '../utils/currency';
 
 interface InventoryViewProps {
@@ -9,6 +9,7 @@ interface InventoryViewProps {
   onUpdateProduct: (product: Product) => void;
   onDeleteProduct: (id: string) => void;
   exchangeRate: number;
+  onSeedDatabase?: () => void;
 }
 
 const InventoryView: React.FC<InventoryViewProps> = ({ 
@@ -16,7 +17,8 @@ const InventoryView: React.FC<InventoryViewProps> = ({
   onAddProduct, 
   onUpdateProduct, 
   onDeleteProduct,
-  exchangeRate 
+  exchangeRate,
+  onSeedDatabase
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -171,8 +173,21 @@ const InventoryView: React.FC<InventoryViewProps> = ({
           </div>
           
           {filteredProducts.length === 0 && (
-            <div className="flex h-48 flex-col items-center justify-center rounded-xl border border-dashed border-dark-800 text-gray-500">
-              <p>No hay productos.</p>
+            <div className="flex h-64 flex-col items-center justify-center rounded-xl border border-dashed border-dark-800 text-gray-500 p-8 text-center">
+              <div className="mb-4 rounded-full bg-dark-800 p-4">
+                 <Search size={32} className="opacity-50" />
+              </div>
+              <p className="mb-4">No hay productos registrados.</p>
+              
+              {onSeedDatabase && (
+                <button 
+                  onClick={onSeedDatabase}
+                  className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-2 rounded-lg text-sm font-bold shadow-lg shadow-emerald-900/20 transition-all animate-in fade-in zoom-in"
+                >
+                   <Database size={16} />
+                   Cargar Productos de Prueba
+                </button>
+              )}
             </div>
           )}
         </div>

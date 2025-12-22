@@ -1,6 +1,7 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { Store, Box, UtensilsCrossed, BarChart3, RefreshCw } from 'lucide-react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { Store, Box, UtensilsCrossed, BarChart3 } from 'lucide-react';
 import { supabase } from './lib/supabase';
+import { PRODUCTS } from './constants'; // Fallback data
 import { Product, CartItem, Sale, PaymentMethod, Expense } from './types';
 import PosView from './components/PosView';
 import InventoryView from './components/InventoryView';
@@ -9,13 +10,22 @@ import SalesStatsView from './components/SalesStatsView';
 type View = 'pos' | 'inventory' | 'stats';
 
 const STORAGE_KEY_RATE = 'fastpos_exchange_rate';
+const STORAGE_KEY_PRODUCTS = 'fastpos_products'; // For offline mode
+const STORAGE_KEY_SALES = 'fastpos_sales';
+const STORAGE_KEY_EXPENSES = 'fastpos_expenses';
 const BCV_API_URL = 'https://ve.dolarapi.com/v1/dolares/oficial';
 
 const App: React.FC = () => {
   const [currentView, setCurrentView] = useState<View>('pos');
   const [isSyncing, setIsSyncing] = useState(false);
   
-  // --- Exchange Rate State (Keep in LocalStorage for speed/offline mostly) ---
+  // Check if Supabase is configured
+  const isOnline = useMemo(() => {
+    const meta = import.meta as any;
+    return !!meta?.env?.VITE_SUPABASE_URL && !!meta?.env?.VITE_SUPABASE_ANON_KEY;
+  }, []);
+
+  // --- Exchange Rate State ---
   const [exchangeRate, setExchangeRate] = useState<number>(() => {
     const savedRate = localStorage.getItem(STORAGE_KEY_RATE);
     return savedRate ? parseFloat(savedRate) : 45.00;
@@ -27,8 +37,38 @@ const App: React.FC = () => {
   const [salesHistory, setSalesHistory] = useState<Sale[]>([]);
   const [expenses, setExpenses] = useState<Expense[]>([]);
 
-  // --- Initial Data Load from Supabase ---
+  // --- Helpers for Offline Mode ---
+  const loadOfflineData = useCallback(() => {
+    // Products
+    const savedProducts = localStorage.getItem(STORAGE_KEY_PRODUCTS);
+    if (savedProducts) {
+      setProducts(JSON.parse(savedProducts));
+    } else {
+      setProducts(PRODUCTS); // Use default constants
+    }
+
+    // Sales
+    const savedSales = localStorage.getItem(STORAGE_KEY_SALES);
+    if (savedSales) setSalesHistory(JSON.parse(savedSales));
+
+    // Expenses
+    const savedExpenses = localStorage.getItem(STORAGE_KEY_EXPENSES);
+    if (savedExpenses) setExpenses(JSON.parse(savedExpenses));
+  }, []);
+
+  const saveOfflineData = (key: string, data: any) => {
+    if (!isOnline) {
+      localStorage.setItem(key, JSON.stringify(data));
+    }
+  };
+
+  // --- Initial Data Load ---
   const fetchAllData = useCallback(async () => {
+    if (!isOnline) {
+      loadOfflineData();
+      return;
+    }
+
     setIsSyncing(true);
     try {
       // 1. Fetch Products
@@ -40,7 +80,7 @@ const App: React.FC = () => {
       if (productsError) throw productsError;
       if (productsData) setProducts(productsData);
 
-      // 2. Fetch Sales (Last 100 for performance, or filter by date needed)
+      // 2. Fetch Sales
       const { data: salesData, error: salesError } = await supabase
         .from('sales')
         .select('*')
@@ -49,11 +89,10 @@ const App: React.FC = () => {
 
       if (salesError) throw salesError;
       if (salesData) {
-        // Map database columns to our TS interface if needed (snake_case to camelCase is automatic often but let's be safe)
         const mappedSales = salesData.map((s: any) => ({
           id: s.id,
           date: s.date,
-          items: s.items, // JSONB column
+          items: s.items,
           total: s.total,
           paymentMethod: s.payment_method,
           exchangeRate: s.exchange_rate
@@ -73,22 +112,21 @@ const App: React.FC = () => {
 
     } catch (error) {
       console.error('Error fetching data from Supabase:', error);
+      // Fallback to offline data if fetch fails heavily?
+      // For now, we trust Supabase if isOnline is true.
     } finally {
       setIsSyncing(false);
     }
-  }, []);
+  }, [isOnline, loadOfflineData]);
 
   useEffect(() => {
-    // Check if credentials exist before trying to fetch
-    const meta = import.meta as any;
-    const url = meta?.env?.VITE_SUPABASE_URL;
-    
-    if (url) {
-      fetchAllData();
-    } else {
-      console.warn("Supabase credentials missing. App running in offline mode (empty data).");
-    }
+    fetchAllData();
   }, [fetchAllData]);
+
+  // Watchers for Offline persistence
+  useEffect(() => { if (!isOnline) saveOfflineData(STORAGE_KEY_PRODUCTS, products); }, [products, isOnline]);
+  useEffect(() => { if (!isOnline) saveOfflineData(STORAGE_KEY_SALES, salesHistory); }, [salesHistory, isOnline]);
+  useEffect(() => { if (!isOnline) saveOfflineData(STORAGE_KEY_EXPENSES, expenses); }, [expenses, isOnline]);
 
 
   // --- Exchange Rate Logic ---
@@ -115,78 +153,104 @@ const App: React.FC = () => {
   const handleUpdateExchangeRate = (newRate: number) => setExchangeRate(newRate);
 
 
-  // --- Inventory Actions (Supabase) ---
+  // --- Actions ---
+
+  // SEED DATABASE (Only when online and empty)
+  const handleSeedDatabase = async () => {
+    if (!isOnline) return;
+    setIsSyncing(true);
+    try {
+      // Insert default products from constants
+      const { data, error } = await supabase
+        .from('products')
+        .insert(PRODUCTS.map(p => ({
+            name: p.name,
+            price: p.price,
+            category: p.category
+        })))
+        .select();
+      
+      if (error) throw error;
+      if (data) setProducts(data);
+      alert("Base de datos inicializada con productos de prueba.");
+    } catch (e) {
+      console.error("Error seeding DB:", e);
+      alert("Error al inicializar la base de datos.");
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
   const handleAddProduct = async (newProductData: Omit<Product, 'id'>) => {
-    // Optimistic Update
     const tempId = Date.now().toString();
     const tempProduct = { ...newProductData, id: tempId };
     setProducts(prev => [...prev, tempProduct]);
 
-    try {
-      const { data, error } = await supabase
-        .from('products')
-        .insert([{
-          name: newProductData.name,
-          price: newProductData.price,
-          category: newProductData.category
-        }])
-        .select()
-        .single();
+    if (isOnline) {
+      try {
+        const { data, error } = await supabase
+          .from('products')
+          .insert([{
+            name: newProductData.name,
+            price: newProductData.price,
+            category: newProductData.category
+          }])
+          .select()
+          .single();
 
-      if (error) throw error;
-      
-      // Replace temp product with real DB product
-      if (data) {
-        setProducts(prev => prev.map(p => p.id === tempId ? data : p));
+        if (error) throw error;
+        if (data) {
+          setProducts(prev => prev.map(p => p.id === tempId ? data : p));
+        }
+      } catch (err) {
+        console.error("Error adding product:", err);
+        setProducts(prev => prev.filter(p => p.id !== tempId));
+        alert("Error de conexión al guardar.");
       }
-    } catch (err) {
-      console.error("Error adding product:", err);
-      // Rollback on error
-      setProducts(prev => prev.filter(p => p.id !== tempId));
-      alert("Error al guardar en la base de datos.");
     }
   };
 
   const handleUpdateProduct = async (updatedProduct: Product) => {
-    // Optimistic
     setProducts(prev => prev.map(p => p.id === updatedProduct.id ? updatedProduct : p));
 
-    try {
-      const { error } = await supabase
-        .from('products')
-        .update({
-          name: updatedProduct.name,
-          price: updatedProduct.price,
-          category: updatedProduct.category
-        })
-        .eq('id', updatedProduct.id);
+    if (isOnline) {
+      try {
+        const { error } = await supabase
+          .from('products')
+          .update({
+            name: updatedProduct.name,
+            price: updatedProduct.price,
+            category: updatedProduct.category
+          })
+          .eq('id', updatedProduct.id);
 
-      if (error) throw error;
-    } catch (err) {
-      console.error("Error updating product:", err);
-      fetchAllData(); // Revert to server state
+        if (error) throw error;
+      } catch (err) {
+        console.error("Error updating product:", err);
+        fetchAllData(); // Revert
+      }
     }
   };
 
   const handleDeleteProduct = async (id: string) => {
-    // Optimistic
     const backup = products;
     setProducts(prev => prev.filter(p => p.id !== id));
 
-    try {
-      const { error } = await supabase
-        .from('products')
-        .delete()
-        .eq('id', id);
+    if (isOnline) {
+      try {
+        const { error } = await supabase
+          .from('products')
+          .delete()
+          .eq('id', id);
 
-      if (error) throw error;
-    } catch (err) {
-      console.error("Error deleting product:", err);
-      setProducts(backup);
+        if (error) throw error;
+      } catch (err) {
+        console.error("Error deleting product:", err);
+        setProducts(backup);
+      }
     }
   };
 
-  // --- POS Actions (Supabase) ---
   const handleCheckout = async (items: CartItem[], total: number, paymentMethod: PaymentMethod) => {
     const newSaleTemp: Sale = {
       id: Date.now().toString(),
@@ -197,39 +261,34 @@ const App: React.FC = () => {
       exchangeRate
     };
 
-    // Optimistic
     setSalesHistory(prev => [newSaleTemp, ...prev]);
 
-    try {
-      const { data, error } = await supabase
-        .from('sales')
-        .insert([{
-          items: items, // Sending the JSON array directly
-          total: total,
-          payment_method: paymentMethod,
-          exchange_rate: exchangeRate,
-          date: new Date().toISOString()
-        }])
-        .select()
-        .single();
+    if (isOnline) {
+      try {
+        const { data, error } = await supabase
+          .from('sales')
+          .insert([{
+            items: items,
+            total: total,
+            payment_method: paymentMethod,
+            exchange_rate: exchangeRate,
+            date: new Date().toISOString()
+          }])
+          .select()
+          .single();
 
-      if (error) throw error;
-
-      if (data) {
-        // Update the temporary ID with the real one from DB
-         setSalesHistory(prev => prev.map(s => s.id === newSaleTemp.id ? {
-           ...s, 
-           id: data.id, 
-           date: data.date 
-         } : s));
+        if (error) throw error;
+        if (data) {
+           setSalesHistory(prev => prev.map(s => s.id === newSaleTemp.id ? { ...s, id: data.id, date: data.date } : s));
+        }
+      } catch (err) {
+        console.error("Error recording sale:", err);
+        // We keep it in state, but warn user
+        // In a real app we'd add it to a sync queue
       }
-    } catch (err) {
-      console.error("Error recording sale:", err);
-      alert("Hubo un error guardando la venta. Verifique conexión.");
     }
   };
 
-  // --- Expense Actions (Supabase) ---
   const handleAddExpense = async (expenseData: Omit<Expense, 'id' | 'date'>) => {
     const tempExpense: Expense = {
       ...expenseData,
@@ -239,25 +298,27 @@ const App: React.FC = () => {
     
     setExpenses(prev => [tempExpense, ...prev]);
 
-    try {
-      const { data, error } = await supabase
-        .from('expenses')
-        .insert([{
-          amount: expenseData.amount,
-          description: expenseData.description,
-          category: expenseData.category,
-          date: new Date().toISOString()
-        }])
-        .select()
-        .single();
+    if (isOnline) {
+      try {
+        const { data, error } = await supabase
+          .from('expenses')
+          .insert([{
+            amount: expenseData.amount,
+            description: expenseData.description,
+            category: expenseData.category,
+            date: new Date().toISOString()
+          }])
+          .select()
+          .single();
 
-      if (error) throw error;
-      if (data) {
-        setExpenses(prev => prev.map(e => e.id === tempExpense.id ? data : e));
+        if (error) throw error;
+        if (data) {
+          setExpenses(prev => prev.map(e => e.id === tempExpense.id ? data : e));
+        }
+      } catch (err) {
+        console.error("Error adding expense:", err);
+        setExpenses(prev => prev.filter(e => e.id !== tempExpense.id));
       }
-    } catch (err) {
-      console.error("Error adding expense:", err);
-      setExpenses(prev => prev.filter(e => e.id !== tempExpense.id));
     }
   };
 
@@ -265,16 +326,18 @@ const App: React.FC = () => {
     const backup = expenses;
     setExpenses(prev => prev.filter(e => e.id !== id));
 
-    try {
-      const { error } = await supabase
-        .from('expenses')
-        .delete()
-        .eq('id', id);
-      
-      if (error) throw error;
-    } catch (err) {
-      console.error("Error deleting expense:", err);
-      setExpenses(backup);
+    if (isOnline) {
+      try {
+        const { error } = await supabase
+          .from('expenses')
+          .delete()
+          .eq('id', id);
+        
+        if (error) throw error;
+      } catch (err) {
+        console.error("Error deleting expense:", err);
+        setExpenses(backup);
+      }
     }
   };
 
@@ -326,8 +389,14 @@ const App: React.FC = () => {
         </div>
 
         {/* Sync Indicator */}
-        <div className="absolute bottom-6 flex justify-center w-full">
-           <div title={isSyncing ? "Sincronizando..." : "Conectado"} className={`h-2 w-2 rounded-full ${isSyncing ? 'bg-yellow-500 animate-pulse' : 'bg-green-500'}`} />
+        <div className="absolute bottom-6 flex justify-center w-full group">
+           <div 
+             className={`h-2.5 w-2.5 rounded-full ${!isOnline ? 'bg-gray-500' : isSyncing ? 'bg-yellow-500 animate-pulse' : 'bg-green-500'}`} 
+           />
+           {/* Tooltip */}
+           <div className="absolute left-14 bottom-0 hidden group-hover:block bg-dark-800 text-xs px-2 py-1 rounded whitespace-nowrap border border-dark-700">
+             {!isOnline ? 'Modo Offline (Local)' : isSyncing ? 'Sincronizando...' : 'Conectado a BD'}
+           </div>
         </div>
       </nav>
 
@@ -350,6 +419,7 @@ const App: React.FC = () => {
             onUpdateProduct={handleUpdateProduct}
             onDeleteProduct={handleDeleteProduct}
             exchangeRate={exchangeRate}
+            onSeedDatabase={isOnline && products.length === 0 ? handleSeedDatabase : undefined}
           />
         )}
         {currentView === 'stats' && (
