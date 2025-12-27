@@ -7,7 +7,7 @@ import PosView from './components/PosView';
 import InventoryView from './components/InventoryView';
 import SalesStatsView from './components/SalesStatsView';
 import OrdersView from './components/OrdersView';
-import { supabase } from './lib/supabase';
+import { db } from './lib/db'; // Usamos nuestro nuevo conector a Neon
 
 type View = 'pos' | 'orders' | 'inventory' | 'stats';
 
@@ -24,52 +24,51 @@ const App: React.FC = () => {
   const [currentView, setCurrentView] = useState<View>('pos');
   const [dbConnected, setDbConnected] = useState<boolean>(false);
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
+  const [isInitialized, setIsInitialized] = useState<boolean>(false);
   
+  // Initialize state directly from localStorage
   const [exchangeRate, setExchangeRate] = useState<number>(() => {
     const saved = localStorage.getItem(STORAGE_KEYS.RATE);
     return saved ? parseFloat(saved) : 45.00;
   });
   
-  const [products, setProducts] = useState<Product[]>([]);
-  const [salesHistory, setSalesHistory] = useState<Sale[]>([]);
-  const [expenses, setExpenses] = useState<Expense[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const [products, setProducts] = useState<Product[]>(() => {
+    const saved = localStorage.getItem(STORAGE_KEYS.PRODUCTS);
+    return saved ? JSON.parse(saved) : PRODUCTS;
+  });
 
-  // --- Sync with Supabase ---
+  const [salesHistory, setSalesHistory] = useState<Sale[]>(() => {
+    const saved = localStorage.getItem(STORAGE_KEYS.SALES);
+    return saved ? JSON.parse(saved) : [];
+  });
+
+  const [expenses, setExpenses] = useState<Expense[]>(() => {
+    const saved = localStorage.getItem(STORAGE_KEYS.EXPENSES);
+    return saved ? JSON.parse(saved) : [];
+  });
+
+  // --- Sync with Neon via Netlify Functions ---
   const fetchAllData = useCallback(async () => {
     setIsSyncing(true);
     try {
-      // 1. Fetch Products
-      const { data: dbProducts, error: pError } = await supabase.from('products').select('*');
-      if (!pError && dbProducts) setProducts(dbProducts);
-      else {
-        const saved = localStorage.getItem(STORAGE_KEYS.PRODUCTS);
-        setProducts(saved ? JSON.parse(saved) : PRODUCTS);
-      }
+      // 1. Intentar inicializar la DB (Crear tablas si es la primera vez)
+      await db.init();
 
-      // 2. Fetch Sales
-      const { data: dbSales, error: sError } = await supabase.from('sales').select('*').order('date', { ascending: false });
-      if (!sError && dbSales) setSalesHistory(dbSales);
-      else {
-        const saved = localStorage.getItem(STORAGE_KEYS.SALES);
-        setSalesHistory(saved ? JSON.parse(saved) : []);
+      // 2. Obtener datos
+      const data = await db.getAll();
+      
+      if (data) {
+        if (data.products && data.products.length > 0) setProducts(data.products);
+        if (data.sales) setSalesHistory(data.sales);
+        if (data.expenses) setExpenses(data.expenses);
+        setDbConnected(true);
       }
-
-      // 3. Fetch Expenses
-      const { data: dbExpenses, error: eError } = await supabase.from('expenses').select('*').order('date', { ascending: false });
-      if (!eError && dbExpenses) setExpenses(dbExpenses);
-      else {
-        const saved = localStorage.getItem(STORAGE_KEYS.EXPENSES);
-        setExpenses(saved ? JSON.parse(saved) : []);
-      }
-
-      setDbConnected(!pError);
     } catch (err) {
-      console.error("Database error:", err);
+      console.warn("Modo Offline: No se pudo conectar a la base de datos Neon.", err);
       setDbConnected(false);
     } finally {
       setIsSyncing(false);
-      setIsLoading(false);
+      setIsInitialized(true);
     }
   }, []);
 
@@ -78,10 +77,21 @@ const App: React.FC = () => {
   }, [fetchAllData]);
 
   // Fallback persistence to localStorage
-  useEffect(() => { localStorage.setItem(STORAGE_KEYS.PRODUCTS, JSON.stringify(products)); }, [products]);
-  useEffect(() => { localStorage.setItem(STORAGE_KEYS.SALES, JSON.stringify(salesHistory)); }, [salesHistory]);
-  useEffect(() => { localStorage.setItem(STORAGE_KEYS.EXPENSES, JSON.stringify(expenses)); }, [expenses]);
-  useEffect(() => { localStorage.setItem(STORAGE_KEYS.RATE, exchangeRate.toString()); }, [exchangeRate]);
+  useEffect(() => { 
+    if(isInitialized) localStorage.setItem(STORAGE_KEYS.PRODUCTS, JSON.stringify(products)); 
+  }, [products, isInitialized]);
+
+  useEffect(() => { 
+    if(isInitialized) localStorage.setItem(STORAGE_KEYS.SALES, JSON.stringify(salesHistory)); 
+  }, [salesHistory, isInitialized]);
+
+  useEffect(() => { 
+    if(isInitialized) localStorage.setItem(STORAGE_KEYS.EXPENSES, JSON.stringify(expenses)); 
+  }, [expenses, isInitialized]);
+
+  useEffect(() => { 
+    localStorage.setItem(STORAGE_KEYS.RATE, exchangeRate.toString()); 
+  }, [exchangeRate]);
 
   const fetchBCVRate = useCallback(async () => {
     try {
@@ -96,7 +106,7 @@ const App: React.FC = () => {
 
   useEffect(() => { fetchBCVRate(); }, [fetchBCVRate]);
 
-  // --- Database Actions ---
+  // --- Database Actions (Modified to use db.ts) ---
 
   const handleCheckout = async (items: CartItem[], total: number, paymentMethod: PaymentMethod, customerName?: string, status: OrderStatus = 'pending') => {
     const today = new Date().toDateString();
@@ -115,13 +125,10 @@ const App: React.FC = () => {
       customerName: customerName || `Cliente ${orderNumber}`
     };
     
-    // Optimistic Update
     setSalesHistory(prev => [newSale, ...prev]);
 
-    // DB Update
     if (dbConnected) {
-      const { error } = await supabase.from('sales').insert([newSale]);
-      if (error) console.error("Error saving sale to DB:", error);
+      db.saveSale(newSale).catch(err => console.error("Error saving to Neon:", err));
     }
   };
 
@@ -131,7 +138,7 @@ const App: React.FC = () => {
     ));
 
     if (dbConnected) {
-      await supabase.from('sales').update({ status: newStatus }).eq('id', saleId);
+      db.updateSaleStatus(saleId, newStatus).catch(err => console.error("Error updating status:", err));
     }
   };
 
@@ -140,21 +147,21 @@ const App: React.FC = () => {
     setProducts(prev => [...prev, newProduct]);
 
     if (dbConnected) {
-      await supabase.from('products').insert([newProduct]);
+      db.addProduct(newProduct).catch(err => console.error("Error adding product:", err));
     }
   };
 
   const handleUpdateProduct = async (updatedProduct: Product) => {
     setProducts(prev => prev.map(p => p.id === updatedProduct.id ? updatedProduct : p));
     if (dbConnected) {
-      await supabase.from('products').update(updatedProduct).eq('id', updatedProduct.id);
+      db.updateProduct(updatedProduct).catch(err => console.error("Error updating product:", err));
     }
   };
 
   const handleDeleteProduct = async (id: string) => {
     setProducts(prev => prev.filter(p => p.id !== id));
     if (dbConnected) {
-      await supabase.from('products').delete().eq('id', id);
+      db.deleteProduct(id).catch(err => console.error("Error deleting product:", err));
     }
   };
 
@@ -162,31 +169,21 @@ const App: React.FC = () => {
     const newExpense: Expense = { ...expenseData, id: Date.now().toString(), date: new Date().toISOString() };
     setExpenses(prev => [newExpense, ...prev]);
     if (dbConnected) {
-      await supabase.from('expenses').insert([newExpense]);
+      db.addExpense(newExpense).catch(err => console.error("Error adding expense:", err));
     }
   };
 
   const handleDeleteExpense = async (id: string) => {
     setExpenses(prev => prev.filter(e => e.id !== id));
     if (dbConnected) {
-      await supabase.from('expenses').delete().eq('id', id);
+      db.deleteExpense(id).catch(err => console.error("Error deleting expense:", err));
     }
   };
 
   const pendingOrdersCount = salesHistory.filter(s => s.status === 'pending').length;
 
-  if (isLoading) {
-    return (
-      <div className="flex h-screen w-full flex-col items-center justify-center bg-dark-950 text-white">
-        <Loader2 className="animate-spin text-primary mb-4" size={48} />
-        <p className="text-sm font-bold animate-pulse">Sincronizando con FastPOS Cloud...</p>
-      </div>
-    );
-  }
-
   return (
     <div className="flex h-screen w-full flex-col overflow-hidden bg-dark-950 text-zinc-100 md:flex-row">
-      {/* DESKTOP SIDEBAR */}
       <nav className="hidden w-20 flex-col items-center border-r border-dark-800 bg-dark-950 py-6 md:flex relative">
         <div className="mb-8 flex h-10 w-10 items-center justify-center rounded-xl bg-primary text-white shadow-lg">
           <UtensilsCrossed size={20} />
@@ -208,16 +205,19 @@ const App: React.FC = () => {
           </button>
         </div>
         
-        {/* Connection Status Icon */}
-        <div className="mt-auto flex flex-col items-center gap-4">
+        <div className="mt-auto flex flex-col items-center gap-4 group relative">
            {isSyncing ? (
              <Loader2 className="animate-spin text-gray-500" size={16} />
            ) : dbConnected ? (
              <Cloud className="text-emerald-500" size={16} />
            ) : (
-             <CloudOff className="text-red-500" size={16} />
+             <CloudOff className="text-red-500 cursor-pointer" size={16} />
            )}
-           <div className="h-2 w-2 rounded-full bg-blue-500 shadow-[0_0_8px_rgba(59,130,246,0.5)]" />
+           {!dbConnected && !isSyncing && (
+             <div className="absolute left-14 bottom-0 w-48 bg-dark-800 border border-dark-700 p-2 rounded text-[10px] text-gray-300 hidden group-hover:block z-50">
+               Sin conexión a Neon DB. Instala @neondatabase/serverless y configura DATABASE_URL.
+             </div>
+           )}
         </div>
       </nav>
 
@@ -237,7 +237,6 @@ const App: React.FC = () => {
         {currentView === 'stats' && <SalesStatsView sales={salesHistory} expenses={expenses} onAddExpense={handleAddExpense} onDeleteExpense={handleDeleteExpense} exchangeRate={exchangeRate} />}
       </div>
 
-      {/* MOBILE BOTTOM NAV */}
       <nav className="flex items-center justify-between px-6 border-t border-dark-800 bg-dark-950/95 py-3 md:hidden z-30 shadow-lg">
         <button onClick={() => setCurrentView('pos')} className={`flex flex-col items-center gap-1 ${currentView === 'pos' ? 'text-primary' : 'text-zinc-500'}`}>
           <Store size={20} /><span className="text-[10px] font-bold">Venta</span>
