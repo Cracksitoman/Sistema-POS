@@ -1,3 +1,4 @@
+
 import { createClient } from '@supabase/supabase-js';
 
 // Safely access environment variables
@@ -9,8 +10,15 @@ const getEnvVar = (key: string) => {
 const supabaseUrl = getEnvVar('VITE_SUPABASE_URL');
 const supabaseAnonKey = getEnvVar('VITE_SUPABASE_ANON_KEY');
 
-if (!supabaseUrl || !supabaseAnonKey) {
-  console.warn('Supabase URL or Key is missing. Database features will not work until configured.');
+// Check if valid keys are present (not empty and not placeholders)
+export const isSupabaseConfigured = 
+  supabaseUrl && 
+  supabaseAnonKey && 
+  !supabaseUrl.includes('placeholder') && 
+  !supabaseAnonKey.includes('placeholder');
+
+if (!isSupabaseConfigured) {
+  console.warn('Supabase URL or Key is missing or invalid. App will run in offline mode.');
 }
 
 // Create client with fallbacks to prevent runtime crash on initialization if keys are missing

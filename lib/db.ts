@@ -1,77 +1,87 @@
 
-// Este archivo reemplaza la lógica de Supabase por llamadas a nuestra propia API en Netlify Functions
+import { supabase, isSupabaseConfigured } from './supabase';
 import { Product, Sale, Expense, OrderStatus } from '../types';
 
-const API_URL = '/api';
-
 export const db = {
-  // Inicializar tablas (se llama al principio)
+  // Verificación de conexión simple
   init: async () => {
+    // Si no está configurado, fallar silenciosamente para modo offline
+    if (!isSupabaseConfigured) return false;
+
     try {
-      await fetch(`${API_URL}?action=init`);
+      const { error } = await supabase.from('products').select('count', { count: 'exact', head: true });
+      if (error) throw error;
       return true;
-    } catch (e) {
-      console.error("Error connecting to DB", e);
+    } catch (e: any) {
+      // Loggear el mensaje específico en lugar del objeto genérico
+      console.warn("Offline Mode - Supabase connection failed:", e.message || e);
       return false;
     }
   },
 
-  // Obtener todo
+  // Obtener todos los datos iniciales
   getAll: async () => {
-    const res = await fetch(`${API_URL}?action=get-all`);
-    if (!res.ok) throw new Error('Error fetching data');
-    return await res.json();
+    if (!isSupabaseConfigured) return { products: [], sales: [], expenses: [] };
+
+    const [productsRes, salesRes, expensesRes] = await Promise.all([
+      supabase.from('products').select('*'),
+      supabase.from('sales').select('*').order('date', { ascending: false }),
+      supabase.from('expenses').select('*').order('date', { ascending: false })
+    ]);
+
+    if (productsRes.error) console.error("Error fetching products:", productsRes.error.message);
+    if (salesRes.error) console.error("Error fetching sales:", salesRes.error.message);
+    if (expensesRes.error) console.error("Error fetching expenses:", expensesRes.error.message);
+
+    return {
+      products: productsRes.data || [],
+      sales: salesRes.data || [],
+      expenses: expensesRes.data || []
+    };
   },
 
-  // Ventas
+  // --- Ventas ---
   saveSale: async (sale: Sale) => {
-    await fetch(`${API_URL}?action=save-sale`, {
-      method: 'POST',
-      body: JSON.stringify(sale),
-    });
+    if (!isSupabaseConfigured) return;
+    const { error } = await supabase.from('sales').insert(sale);
+    if (error) console.error("Error saving sale:", error.message);
   },
 
   updateSaleStatus: async (id: string, status: OrderStatus) => {
-    await fetch(`${API_URL}?action=update-sale-status`, {
-      method: 'POST',
-      body: JSON.stringify({ id, status }),
-    });
+    if (!isSupabaseConfigured) return;
+    const { error } = await supabase.from('sales').update({ status }).eq('id', id);
+    if (error) console.error("Error updating sale status:", error.message);
   },
 
-  // Productos
+  // --- Productos ---
   addProduct: async (product: Product) => {
-    await fetch(`${API_URL}?action=save-product`, {
-      method: 'POST',
-      body: JSON.stringify(product),
-    });
+    if (!isSupabaseConfigured) return;
+    const { error } = await supabase.from('products').insert(product);
+    if (error) console.error("Error adding product:", error.message);
   },
 
   updateProduct: async (product: Product) => {
-    await fetch(`${API_URL}?action=update-product`, {
-      method: 'POST',
-      body: JSON.stringify(product),
-    });
+    if (!isSupabaseConfigured) return;
+    const { error } = await supabase.from('products').update(product).eq('id', product.id);
+    if (error) console.error("Error updating product:", error.message);
   },
 
   deleteProduct: async (id: string) => {
-    await fetch(`${API_URL}?action=delete-product`, {
-      method: 'POST',
-      body: JSON.stringify({ id }),
-    });
+    if (!isSupabaseConfigured) return;
+    const { error } = await supabase.from('products').delete().eq('id', id);
+    if (error) console.error("Error deleting product:", error.message);
   },
 
-  // Gastos
+  // --- Gastos ---
   addExpense: async (expense: Expense) => {
-    await fetch(`${API_URL}?action=save-expense`, {
-      method: 'POST',
-      body: JSON.stringify(expense),
-    });
+    if (!isSupabaseConfigured) return;
+    const { error } = await supabase.from('expenses').insert(expense);
+    if (error) console.error("Error adding expense:", error.message);
   },
 
   deleteExpense: async (id: string) => {
-    await fetch(`${API_URL}?action=delete-expense`, {
-      method: 'POST',
-      body: JSON.stringify({ id }),
-    });
+    if (!isSupabaseConfigured) return;
+    const { error } = await supabase.from('expenses').delete().eq('id', id);
+    if (error) console.error("Error deleting expense:", error.message);
   }
 };

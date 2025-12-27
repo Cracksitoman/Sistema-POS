@@ -7,7 +7,7 @@ import PosView from './components/PosView';
 import InventoryView from './components/InventoryView';
 import SalesStatsView from './components/SalesStatsView';
 import OrdersView from './components/OrdersView';
-import { db } from './lib/db'; // Usamos nuestro nuevo conector a Neon
+import { db } from './lib/db';
 
 type View = 'pos' | 'orders' | 'inventory' | 'stats';
 
@@ -47,24 +47,28 @@ const App: React.FC = () => {
     return saved ? JSON.parse(saved) : [];
   });
 
-  // --- Sync with Neon via Netlify Functions ---
+  // --- Sync with Supabase ---
   const fetchAllData = useCallback(async () => {
     setIsSyncing(true);
     try {
-      // 1. Intentar inicializar la DB (Crear tablas si es la primera vez)
-      await db.init();
-
-      // 2. Obtener datos
-      const data = await db.getAll();
+      // 1. Verificar conexión
+      const isConnected = await db.init();
       
-      if (data) {
-        if (data.products && data.products.length > 0) setProducts(data.products);
-        if (data.sales) setSalesHistory(data.sales);
-        if (data.expenses) setExpenses(data.expenses);
-        setDbConnected(true);
+      if (isConnected) {
+        // 2. Obtener datos solo si hay conexión
+        const data = await db.getAll();
+        if (data) {
+          // Solo sobrescribimos si la DB tiene datos, para no borrar data local si la DB es nueva
+          if (data.products && data.products.length > 0) setProducts(data.products);
+          if (data.sales) setSalesHistory(data.sales);
+          if (data.expenses) setExpenses(data.expenses);
+          setDbConnected(true);
+        }
+      } else {
+        setDbConnected(false);
       }
     } catch (err) {
-      console.warn("Modo Offline: No se pudo conectar a la base de datos Neon.", err);
+      console.warn("Modo Offline: No se pudo conectar a Supabase.", err);
       setDbConnected(false);
     } finally {
       setIsSyncing(false);
@@ -106,7 +110,7 @@ const App: React.FC = () => {
 
   useEffect(() => { fetchBCVRate(); }, [fetchBCVRate]);
 
-  // --- Database Actions (Modified to use db.ts) ---
+  // --- Database Actions ---
 
   const handleCheckout = async (items: CartItem[], total: number, paymentMethod: PaymentMethod, customerName?: string, status: OrderStatus = 'pending') => {
     const today = new Date().toDateString();
@@ -128,7 +132,7 @@ const App: React.FC = () => {
     setSalesHistory(prev => [newSale, ...prev]);
 
     if (dbConnected) {
-      db.saveSale(newSale).catch(err => console.error("Error saving to Neon:", err));
+      db.saveSale(newSale).catch(err => console.error("Error saving to DB:", err));
     }
   };
 
@@ -215,7 +219,7 @@ const App: React.FC = () => {
            )}
            {!dbConnected && !isSyncing && (
              <div className="absolute left-14 bottom-0 w-48 bg-dark-800 border border-dark-700 p-2 rounded text-[10px] text-gray-300 hidden group-hover:block z-50">
-               Sin conexión a Neon DB. Instala @neondatabase/serverless y configura DATABASE_URL.
+               Sin conexión a Supabase. Verifica tu archivo .env o metadata.
              </div>
            )}
         </div>
