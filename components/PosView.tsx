@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { ShoppingBag, Search, Wallet, CreditCard, Banknote, Smartphone, CheckCircle2, RefreshCw } from 'lucide-react';
+import { ShoppingBag, Search, Wallet, CreditCard, Banknote, Smartphone, CheckCircle2, DollarSign, User } from 'lucide-react';
 import { CartItem, Product, PaymentMethod } from '../types';
 import ProductCard from './ProductCard';
 import CartItemRow from './CartItemRow';
@@ -8,7 +8,7 @@ import { formatCurrency, formatVES } from '../utils/currency';
 
 interface PosViewProps {
   products: Product[];
-  onCheckout: (items: CartItem[], total: number, paymentMethod: PaymentMethod) => void;
+  onCheckout: (items: CartItem[], total: number, paymentMethod: PaymentMethod, customerName?: string) => void;
   exchangeRate: number;
   onUpdateExchangeRate: (rate: number) => void;
   onRefreshRate: () => void;
@@ -30,7 +30,9 @@ const PosView: React.FC<PosViewProps> = ({
   const [isCheckoutModalOpen, setIsCheckoutModalOpen] = useState(false);
   const [isRateModalOpen, setIsRateModalOpen] = useState(false);
   
+  // Checkout Form State
   const [selectedMethod, setSelectedMethod] = useState<PaymentMethod>('cash');
+  const [customerName, setCustomerName] = useState('');
 
   // Add Item to Cart
   const handleAddToCart = (product: Product) => {
@@ -47,27 +49,15 @@ const PosView: React.FC<PosViewProps> = ({
     });
   };
 
-  // Increment Quantity
+  // Cart Operations
   const handleIncrement = (id: string) => {
-    setCart((prev) =>
-      prev.map((item) =>
-        item.id === id ? { ...item, quantity: item.quantity + 1 } : item
-      )
-    );
+    setCart((prev) => prev.map((item) => item.id === id ? { ...item, quantity: item.quantity + 1 } : item));
   };
 
-  // Decrement Quantity (Remove if 0)
   const handleDecrement = (id: string) => {
-    setCart((prev) =>
-      prev
-        .map((item) =>
-          item.id === id ? { ...item, quantity: item.quantity - 1 } : item
-        )
-        .filter((item) => item.quantity > 0)
-    );
+    setCart((prev) => prev.map((item) => item.id === id ? { ...item, quantity: item.quantity - 1 } : item).filter((item) => item.quantity > 0));
   };
 
-  // Remove Item Completely
   const handleRemove = (id: string) => {
     setCart((prev) => prev.filter((item) => item.id !== id));
   };
@@ -81,16 +71,17 @@ const PosView: React.FC<PosViewProps> = ({
     return { subtotal, total, itemCount, totalVES };
   }, [cart, exchangeRate]);
 
-  // Handle Initial Click on "Cobrar"
+  // Handle Checkout Open
   const openCheckoutModal = () => {
     if (cart.length === 0) return;
-    setSelectedMethod('cash'); // Reset to default
+    setSelectedMethod('cash');
+    setCustomerName('');
     setIsCheckoutModalOpen(true);
   };
 
   // Finalize Payment
   const confirmPayment = () => {
-    onCheckout(cart, totals.total, selectedMethod);
+    onCheckout(cart, totals.total, selectedMethod, customerName);
     setCart([]);
     setIsCheckoutModalOpen(false);
   };
@@ -116,12 +107,10 @@ const PosView: React.FC<PosViewProps> = ({
           </div>
           
           <div className="flex items-center gap-4">
-            
-            {/* Exchange Rate Button (Opens Modal) */}
+            {/* Exchange Rate Button */}
             <button 
               onClick={() => setIsRateModalOpen(true)}
               className="flex items-center gap-2 bg-dark-900 border border-dark-800 hover:border-primary/50 hover:bg-dark-800 rounded-lg px-3 py-1.5 transition-all group"
-              title="Configurar Tasa de Cambio"
             >
               <div className="flex items-center justify-center w-5 h-5 rounded-full bg-emerald-500/10 text-emerald-500">
                 <Banknote size={12} />
@@ -171,18 +160,15 @@ const PosView: React.FC<PosViewProps> = ({
         </main>
       </div>
 
-      {/* RIGHT SIDE: Cart / Order Summary */}
+      {/* RIGHT SIDE: Cart */}
       <aside className="flex w-full flex-col border-t md:border-t-0 md:border-l border-dark-800 bg-dark-900 shadow-[0_-4px_20px_rgba(0,0,0,0.4)] md:shadow-none md:w-[380px] z-20 h-[40vh] md:h-auto">
-        
-        {/* Mobile Handle / Desktop Header */}
         <div className="hidden md:flex items-center justify-between border-b border-dark-800 p-5">
           <h2 className="font-bold text-white">Orden Actual</h2>
           <div className="rounded-full bg-dark-800 px-2 py-0.5 text-[10px] font-medium text-primary border border-dark-700">
-            En Curso
+            {totals.itemCount} Items
           </div>
         </div>
 
-        {/* Cart Items List */}
         <div className="flex-1 overflow-y-auto p-4 md:p-5 bg-dark-900">
           {cart.length === 0 ? (
             <div className="flex h-full flex-col items-center justify-center text-center opacity-40 py-4">
@@ -204,7 +190,6 @@ const PosView: React.FC<PosViewProps> = ({
           )}
         </div>
 
-        {/* Footer Totals & Checkout */}
         <div className="bg-dark-950 p-4 md:p-6 border-t border-dark-800">
           <div className="mb-4 flex flex-col gap-1">
             <div className="flex items-center justify-between">
@@ -240,56 +225,55 @@ const PosView: React.FC<PosViewProps> = ({
 
       {/* Checkout Modal */}
       {isCheckoutModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-200">
-          <div className="w-full max-w-md rounded-2xl bg-dark-900 border border-dark-800 shadow-2xl overflow-hidden">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 backdrop-blur-md p-4 animate-in fade-in duration-200">
+          <div className="w-full max-w-sm rounded-2xl bg-dark-950 border border-dark-800 shadow-2xl flex flex-col">
             
-            <div className="bg-dark-950 p-6 text-center border-b border-dark-800">
-              <h3 className="text-gray-400 text-sm font-medium mb-1">Total a cobrar</h3>
-              <div className="flex flex-col items-center gap-1">
-                <span className="text-4xl font-bold text-white">{formatCurrency(totals.total)}</span>
-                <span className="text-lg font-medium text-gray-400">{formatVES(totals.totalVES)}</span>
-              </div>
+            <div className="bg-dark-900/50 p-6 border-b border-dark-800">
+              <h3 className="text-white text-xl font-bold mb-1">Confirmar Pago</h3>
+              <p className="text-gray-400 text-sm">Ingrese datos del cliente y método</p>
             </div>
 
             <div className="p-6">
-              <label className="block text-sm font-medium text-gray-400 mb-4 uppercase tracking-wider text-center">Seleccionar Método de Pago</label>
-              
-              <div className="grid grid-cols-3 gap-3 mb-8">
-                <button
-                  onClick={() => setSelectedMethod('cash')}
-                  className={`flex flex-col items-center justify-center gap-2 rounded-xl border p-4 transition-all ${
-                    selectedMethod === 'cash' 
-                      ? 'bg-primary/20 border-primary text-primary shadow-[0_0_15px_rgba(249,115,22,0.15)]' 
-                      : 'bg-dark-800 border-transparent text-gray-400 hover:bg-dark-700'
-                  }`}
-                >
-                  <Banknote size={24} />
-                  <span className="text-xs font-bold">Efectivo</span>
-                </button>
-                
-                <button
-                  onClick={() => setSelectedMethod('card')}
-                  className={`flex flex-col items-center justify-center gap-2 rounded-xl border p-4 transition-all ${
-                    selectedMethod === 'card' 
-                      ? 'bg-primary/20 border-primary text-primary shadow-[0_0_15px_rgba(249,115,22,0.15)]' 
-                      : 'bg-dark-800 border-transparent text-gray-400 hover:bg-dark-700'
-                  }`}
-                >
-                  <CreditCard size={24} />
-                  <span className="text-xs font-bold">Tarjeta</span>
-                </button>
-                
-                <button
-                  onClick={() => setSelectedMethod('mobile')}
-                  className={`flex flex-col items-center justify-center gap-2 rounded-xl border p-4 transition-all ${
-                    selectedMethod === 'mobile' 
-                      ? 'bg-primary/20 border-primary text-primary shadow-[0_0_15px_rgba(249,115,22,0.15)]' 
-                      : 'bg-dark-800 border-transparent text-gray-400 hover:bg-dark-700'
-                  }`}
-                >
-                  <Smartphone size={24} />
-                  <span className="text-xs font-bold">Pago Móvil</span>
-                </button>
+              <div className="mb-6 text-center">
+                <span className="block text-3xl font-bold text-white">{formatCurrency(totals.total)}</span>
+                <span className="block text-sm font-bold text-primary mt-1">{formatVES(totals.totalVES)}</span>
+              </div>
+
+              {/* Customer Name Input */}
+              <div className="mb-6">
+                 <label className="block text-xs font-bold text-gray-500 uppercase mb-2">Nombre Cliente (Para llamado)</label>
+                 <div className="relative">
+                    <User className="absolute left-3 top-2.5 text-gray-500" size={16} />
+                    <input 
+                      type="text" 
+                      placeholder="Ej. Juan Pérez"
+                      className="w-full bg-dark-900 border border-dark-800 rounded-xl py-2 pl-9 pr-3 text-white focus:border-primary focus:outline-none placeholder-gray-600"
+                      value={customerName}
+                      onChange={(e) => setCustomerName(e.target.value)}
+                    />
+                 </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3 mb-6">
+                {[
+                  { id: 'cash', icon: Banknote, label: 'Efectivo' },
+                  { id: 'card', icon: CreditCard, label: 'Punto' },
+                  { id: 'mobile', icon: Smartphone, label: 'Pago Móvil' },
+                  { id: 'zelle', icon: DollarSign, label: 'Zelle' },
+                ].map((method) => (
+                  <button
+                    key={method.id}
+                    onClick={() => setSelectedMethod(method.id as PaymentMethod)}
+                    className={`flex flex-col items-center justify-center gap-2 rounded-xl border p-4 transition-all ${
+                      selectedMethod === method.id 
+                        ? 'bg-primary/20 border-primary text-primary' 
+                        : 'bg-dark-900 border-dark-800 text-gray-400 hover:bg-dark-800 hover:text-white'
+                    }`}
+                  >
+                    <method.icon size={24} />
+                    <span className="text-xs font-bold">{method.label}</span>
+                  </button>
+                ))}
               </div>
 
               <div className="flex gap-3">
@@ -304,7 +288,7 @@ const PosView: React.FC<PosViewProps> = ({
                   className="flex-[2] flex items-center justify-center gap-2 rounded-xl bg-green-600 py-3.5 text-sm font-bold text-white hover:bg-green-500 shadow-lg shadow-green-900/20 transition-all active:scale-[0.98]"
                 >
                   <CheckCircle2 size={18} />
-                  Confirmar Cobro
+                  Confirmar
                 </button>
               </div>
             </div>

@@ -1,4 +1,7 @@
-export type PaymentMethod = 'cash' | 'card' | 'mobile';
+
+export type PaymentMethod = 'cash' | 'card' | 'mobile' | 'zelle';
+
+export type OrderStatus = 'pending' | 'ready' | 'completed' | 'cancelled';
 
 export interface Product {
   id: string;
@@ -13,11 +16,14 @@ export interface CartItem extends Product {
 
 export interface Sale {
   id: string;
-  date: string; // ISO string for storage
+  orderNumber: number; // Daily incremental number
+  date: string; // ISO string
   items: CartItem[];
   total: number;
   paymentMethod: PaymentMethod;
-  exchangeRate: number; // Stored rate at the time of sale
+  exchangeRate: number;
+  status: OrderStatus;
+  customerName?: string;
 }
 
 export type ExpenseCategory = 'expense' | 'loss';

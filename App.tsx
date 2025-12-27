@@ -1,30 +1,23 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { Store, Box, UtensilsCrossed, BarChart3 } from 'lucide-react';
-import { supabase } from './lib/supabase';
+import React, { useState, useEffect, useCallback } from 'react';
+import { Store, Box, UtensilsCrossed, BarChart3, ChefHat } from 'lucide-react';
 import { PRODUCTS } from './constants'; // Fallback data
-import { Product, CartItem, Sale, PaymentMethod, Expense } from './types';
+import { Product, CartItem, Sale, PaymentMethod, Expense, OrderStatus } from './types';
 import PosView from './components/PosView';
 import InventoryView from './components/InventoryView';
 import SalesStatsView from './components/SalesStatsView';
+import OrdersView from './components/OrdersView';
 
-type View = 'pos' | 'inventory' | 'stats';
+type View = 'pos' | 'orders' | 'inventory' | 'stats';
 
 const STORAGE_KEY_RATE = 'fastpos_exchange_rate';
-const STORAGE_KEY_PRODUCTS = 'fastpos_products'; // For offline mode
+const STORAGE_KEY_PRODUCTS = 'fastpos_products';
 const STORAGE_KEY_SALES = 'fastpos_sales';
 const STORAGE_KEY_EXPENSES = 'fastpos_expenses';
 const BCV_API_URL = 'https://ve.dolarapi.com/v1/dolares/oficial';
 
 const App: React.FC = () => {
   const [currentView, setCurrentView] = useState<View>('pos');
-  const [isSyncing, setIsSyncing] = useState(false);
   
-  // Check if Supabase is configured
-  const isOnline = useMemo(() => {
-    const meta = import.meta as any;
-    return !!meta?.env?.VITE_SUPABASE_URL && !!meta?.env?.VITE_SUPABASE_ANON_KEY;
-  }, []);
-
   // --- Exchange Rate State ---
   const [exchangeRate, setExchangeRate] = useState<number>(() => {
     const savedRate = localStorage.getItem(STORAGE_KEY_RATE);
@@ -32,104 +25,45 @@ const App: React.FC = () => {
   });
   const [isLoadingRate, setIsLoadingRate] = useState(false);
 
-  // --- Data States ---
-  const [products, setProducts] = useState<Product[]>([]);
-  const [salesHistory, setSalesHistory] = useState<Sale[]>([]);
-  const [expenses, setExpenses] = useState<Expense[]>([]);
+  // --- Data States (Initialize from LocalStorage or Constants) ---
+  
+  // Products
+  const [products, setProducts] = useState<Product[]>(() => {
+    const saved = localStorage.getItem(STORAGE_KEY_PRODUCTS);
+    return saved ? JSON.parse(saved) : PRODUCTS;
+  });
 
-  // --- Helpers for Offline Mode ---
-  const loadOfflineData = useCallback(() => {
-    // Products
-    const savedProducts = localStorage.getItem(STORAGE_KEY_PRODUCTS);
-    if (savedProducts) {
-      setProducts(JSON.parse(savedProducts));
-    } else {
-      setProducts(PRODUCTS); // Use default constants
-    }
+  // Sales
+  const [salesHistory, setSalesHistory] = useState<Sale[]>(() => {
+    const saved = localStorage.getItem(STORAGE_KEY_SALES);
+    return saved ? JSON.parse(saved) : [];
+  });
 
-    // Sales
-    const savedSales = localStorage.getItem(STORAGE_KEY_SALES);
-    if (savedSales) setSalesHistory(JSON.parse(savedSales));
+  // Expenses
+  const [expenses, setExpenses] = useState<Expense[]>(() => {
+    const saved = localStorage.getItem(STORAGE_KEY_EXPENSES);
+    return saved ? JSON.parse(saved) : [];
+  });
 
-    // Expenses
-    const savedExpenses = localStorage.getItem(STORAGE_KEY_EXPENSES);
-    if (savedExpenses) setExpenses(JSON.parse(savedExpenses));
-  }, []);
-
-  const saveOfflineData = (key: string, data: any) => {
-    if (!isOnline) {
-      localStorage.setItem(key, JSON.stringify(data));
-    }
-  };
-
-  // --- Initial Data Load ---
-  const fetchAllData = useCallback(async () => {
-    if (!isOnline) {
-      loadOfflineData();
-      return;
-    }
-
-    setIsSyncing(true);
-    try {
-      // 1. Fetch Products
-      const { data: productsData, error: productsError } = await supabase
-        .from('products')
-        .select('*')
-        .order('name');
-      
-      if (productsError) throw productsError;
-      if (productsData) setProducts(productsData);
-
-      // 2. Fetch Sales
-      const { data: salesData, error: salesError } = await supabase
-        .from('sales')
-        .select('*')
-        .order('date', { ascending: false })
-        .limit(200);
-
-      if (salesError) throw salesError;
-      if (salesData) {
-        const mappedSales = salesData.map((s: any) => ({
-          id: s.id,
-          date: s.date,
-          items: s.items,
-          total: s.total,
-          paymentMethod: s.payment_method,
-          exchangeRate: s.exchange_rate
-        }));
-        setSalesHistory(mappedSales);
-      }
-
-      // 3. Fetch Expenses
-      const { data: expensesData, error: expensesError } = await supabase
-        .from('expenses')
-        .select('*')
-        .order('date', { ascending: false })
-        .limit(200);
-
-      if (expensesError) throw expensesError;
-      if (expensesData) setExpenses(expensesData);
-
-    } catch (error) {
-      console.error('Error fetching data from Supabase:', error);
-      // Fallback to offline data if fetch fails heavily?
-      // For now, we trust Supabase if isOnline is true.
-    } finally {
-      setIsSyncing(false);
-    }
-  }, [isOnline, loadOfflineData]);
+  // --- Persistence Effects (Auto-save to LocalStorage) ---
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEY_PRODUCTS, JSON.stringify(products));
+  }, [products]);
 
   useEffect(() => {
-    fetchAllData();
-  }, [fetchAllData]);
+    localStorage.setItem(STORAGE_KEY_SALES, JSON.stringify(salesHistory));
+  }, [salesHistory]);
 
-  // Watchers for Offline persistence
-  useEffect(() => { if (!isOnline) saveOfflineData(STORAGE_KEY_PRODUCTS, products); }, [products, isOnline]);
-  useEffect(() => { if (!isOnline) saveOfflineData(STORAGE_KEY_SALES, salesHistory); }, [salesHistory, isOnline]);
-  useEffect(() => { if (!isOnline) saveOfflineData(STORAGE_KEY_EXPENSES, expenses); }, [expenses, isOnline]);
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEY_EXPENSES, JSON.stringify(expenses));
+  }, [expenses]);
+
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEY_RATE, exchangeRate.toString());
+  }, [exchangeRate]);
 
 
-  // --- Exchange Rate Logic ---
+  // --- Exchange Rate Logic (Fetch Online) ---
   const fetchBCVRate = useCallback(async () => {
     setIsLoadingRate(true);
     try {
@@ -143,202 +77,73 @@ const App: React.FC = () => {
       if (rate > 0) setExchangeRate(rate);
     } catch (error) {
       console.error('Error fetching BCV rate:', error);
+      // Keep existing rate on error
     } finally {
       setIsLoadingRate(false);
     }
   }, []);
 
+  // Fetch rate on mount once
   useEffect(() => { fetchBCVRate(); }, [fetchBCVRate]);
-  useEffect(() => { localStorage.setItem(STORAGE_KEY_RATE, exchangeRate.toString()); }, [exchangeRate]);
+
   const handleUpdateExchangeRate = (newRate: number) => setExchangeRate(newRate);
 
 
-  // --- Actions ---
+  // --- Actions (Pure State Updates) ---
 
-  // SEED DATABASE (Only when online and empty)
-  const handleSeedDatabase = async () => {
-    if (!isOnline) return;
-    setIsSyncing(true);
-    try {
-      // Insert default products from constants
-      const { data, error } = await supabase
-        .from('products')
-        .insert(PRODUCTS.map(p => ({
-            name: p.name,
-            price: p.price,
-            category: p.category
-        })))
-        .select();
-      
-      if (error) throw error;
-      if (data) setProducts(data);
-      alert("Base de datos inicializada con productos de prueba.");
-    } catch (e) {
-      console.error("Error seeding DB:", e);
-      alert("Error al inicializar la base de datos.");
-    } finally {
-      setIsSyncing(false);
-    }
+  const handleAddProduct = (newProductData: Omit<Product, 'id'>) => {
+    const newProduct: Product = { 
+      ...newProductData, 
+      id: Date.now().toString() 
+    };
+    setProducts(prev => [...prev, newProduct]);
   };
 
-  const handleAddProduct = async (newProductData: Omit<Product, 'id'>) => {
-    const tempId = Date.now().toString();
-    const tempProduct = { ...newProductData, id: tempId };
-    setProducts(prev => [...prev, tempProduct]);
-
-    if (isOnline) {
-      try {
-        const { data, error } = await supabase
-          .from('products')
-          .insert([{
-            name: newProductData.name,
-            price: newProductData.price,
-            category: newProductData.category
-          }])
-          .select()
-          .single();
-
-        if (error) throw error;
-        if (data) {
-          setProducts(prev => prev.map(p => p.id === tempId ? data : p));
-        }
-      } catch (err) {
-        console.error("Error adding product:", err);
-        setProducts(prev => prev.filter(p => p.id !== tempId));
-        alert("Error de conexión al guardar.");
-      }
-    }
-  };
-
-  const handleUpdateProduct = async (updatedProduct: Product) => {
+  const handleUpdateProduct = (updatedProduct: Product) => {
     setProducts(prev => prev.map(p => p.id === updatedProduct.id ? updatedProduct : p));
-
-    if (isOnline) {
-      try {
-        const { error } = await supabase
-          .from('products')
-          .update({
-            name: updatedProduct.name,
-            price: updatedProduct.price,
-            category: updatedProduct.category
-          })
-          .eq('id', updatedProduct.id);
-
-        if (error) throw error;
-      } catch (err) {
-        console.error("Error updating product:", err);
-        fetchAllData(); // Revert
-      }
-    }
   };
 
-  const handleDeleteProduct = async (id: string) => {
-    const backup = products;
+  const handleDeleteProduct = (id: string) => {
     setProducts(prev => prev.filter(p => p.id !== id));
-
-    if (isOnline) {
-      try {
-        const { error } = await supabase
-          .from('products')
-          .delete()
-          .eq('id', id);
-
-        if (error) throw error;
-      } catch (err) {
-        console.error("Error deleting product:", err);
-        setProducts(backup);
-      }
-    }
   };
 
-  const handleCheckout = async (items: CartItem[], total: number, paymentMethod: PaymentMethod) => {
-    const newSaleTemp: Sale = {
+  const handleCheckout = (items: CartItem[], total: number, paymentMethod: PaymentMethod, customerName?: string) => {
+    // Generate simple daily order number
+    const today = new Date().toDateString();
+    const todaysOrders = salesHistory.filter(s => new Date(s.date).toDateString() === today);
+    const orderNumber = todaysOrders.length + 1;
+
+    const newSale: Sale = {
       id: Date.now().toString(),
+      orderNumber,
       date: new Date().toISOString(),
       items,
       total,
       paymentMethod,
-      exchangeRate
+      exchangeRate,
+      status: 'pending',
+      customerName: customerName || `Cliente ${orderNumber}`
     };
-
-    setSalesHistory(prev => [newSaleTemp, ...prev]);
-
-    if (isOnline) {
-      try {
-        const { data, error } = await supabase
-          .from('sales')
-          .insert([{
-            items: items,
-            total: total,
-            payment_method: paymentMethod,
-            exchange_rate: exchangeRate,
-            date: new Date().toISOString()
-          }])
-          .select()
-          .single();
-
-        if (error) throw error;
-        if (data) {
-           setSalesHistory(prev => prev.map(s => s.id === newSaleTemp.id ? { ...s, id: data.id, date: data.date } : s));
-        }
-      } catch (err) {
-        console.error("Error recording sale:", err);
-        // We keep it in state, but warn user
-        // In a real app we'd add it to a sync queue
-      }
-    }
+    setSalesHistory(prev => [newSale, ...prev]);
   };
 
-  const handleAddExpense = async (expenseData: Omit<Expense, 'id' | 'date'>) => {
-    const tempExpense: Expense = {
+  const handleUpdateOrderStatus = (saleId: string, newStatus: OrderStatus) => {
+    setSalesHistory(prev => prev.map(sale => 
+      sale.id === saleId ? { ...sale, status: newStatus } : sale
+    ));
+  };
+
+  const handleAddExpense = (expenseData: Omit<Expense, 'id' | 'date'>) => {
+    const newExpense: Expense = {
       ...expenseData,
       id: Date.now().toString(),
       date: new Date().toISOString(),
     };
-    
-    setExpenses(prev => [tempExpense, ...prev]);
-
-    if (isOnline) {
-      try {
-        const { data, error } = await supabase
-          .from('expenses')
-          .insert([{
-            amount: expenseData.amount,
-            description: expenseData.description,
-            category: expenseData.category,
-            date: new Date().toISOString()
-          }])
-          .select()
-          .single();
-
-        if (error) throw error;
-        if (data) {
-          setExpenses(prev => prev.map(e => e.id === tempExpense.id ? data : e));
-        }
-      } catch (err) {
-        console.error("Error adding expense:", err);
-        setExpenses(prev => prev.filter(e => e.id !== tempExpense.id));
-      }
-    }
+    setExpenses(prev => [newExpense, ...prev]);
   };
 
-  const handleDeleteExpense = async (id: string) => {
-    const backup = expenses;
+  const handleDeleteExpense = (id: string) => {
     setExpenses(prev => prev.filter(e => e.id !== id));
-
-    if (isOnline) {
-      try {
-        const { error } = await supabase
-          .from('expenses')
-          .delete()
-          .eq('id', id);
-        
-        if (error) throw error;
-      } catch (err) {
-        console.error("Error deleting expense:", err);
-        setExpenses(backup);
-      }
-    }
   };
 
   // --- Navigation Helper ---
@@ -355,6 +160,9 @@ const App: React.FC = () => {
       isActive ? 'bg-primary/10' : 'bg-transparent group-hover:bg-dark-800'
     }`;
   };
+
+  // Calculate pending orders badge
+  const pendingOrdersCount = salesHistory.filter(s => s.status === 'pending').length;
 
   return (
     <div className="flex h-screen w-full flex-col overflow-hidden bg-dark-950 text-zinc-100 md:flex-row">
@@ -373,6 +181,18 @@ const App: React.FC = () => {
             <span className="text-[10px] font-medium">Venta</span>
           </button>
 
+          <button onClick={() => setCurrentView('orders')} className={getNavLinkClass('orders')}>
+            <div className={`relative ${getIconContainerClass('orders')}`}>
+              <ChefHat size={22} />
+              {pendingOrdersCount > 0 && (
+                <span className="absolute -top-1 -right-1 flex h-4 w-4 items-center justify-center rounded-full bg-red-500 text-[10px] font-bold text-white">
+                  {pendingOrdersCount}
+                </span>
+              )}
+            </div>
+            <span className="text-[10px] font-medium">Pedidos</span>
+          </button>
+
           <button onClick={() => setCurrentView('inventory')} className={getNavLinkClass('inventory')}>
              <div className={getIconContainerClass('inventory')}>
               <Box size={22} />
@@ -384,18 +204,15 @@ const App: React.FC = () => {
              <div className={getIconContainerClass('stats')}>
               <BarChart3 size={22} />
             </div>
-            <span className="text-[10px] font-medium">Stats</span>
+            <span className="text-[10px] font-medium">Cierre</span>
           </button>
         </div>
 
-        {/* Sync Indicator */}
+        {/* Local Indicator */}
         <div className="absolute bottom-6 flex justify-center w-full group">
-           <div 
-             className={`h-2.5 w-2.5 rounded-full ${!isOnline ? 'bg-gray-500' : isSyncing ? 'bg-yellow-500 animate-pulse' : 'bg-green-500'}`} 
-           />
-           {/* Tooltip */}
+           <div className="h-2.5 w-2.5 rounded-full bg-blue-500" />
            <div className="absolute left-14 bottom-0 hidden group-hover:block bg-dark-800 text-xs px-2 py-1 rounded whitespace-nowrap border border-dark-700">
-             {!isOnline ? 'Modo Offline (Local)' : isSyncing ? 'Sincronizando...' : 'Conectado a BD'}
+             Modo Local
            </div>
         </div>
       </nav>
@@ -412,6 +229,12 @@ const App: React.FC = () => {
             isLoadingRate={isLoadingRate}
           />
         )}
+        {currentView === 'orders' && (
+          <OrdersView 
+            orders={salesHistory}
+            onUpdateStatus={handleUpdateOrderStatus}
+          />
+        )}
         {currentView === 'inventory' && (
           <InventoryView 
             products={products} 
@@ -419,7 +242,6 @@ const App: React.FC = () => {
             onUpdateProduct={handleUpdateProduct}
             onDeleteProduct={handleDeleteProduct}
             exchangeRate={exchangeRate}
-            onSeedDatabase={isOnline && products.length === 0 ? handleSeedDatabase : undefined}
           />
         )}
         {currentView === 'stats' && (
@@ -443,18 +265,25 @@ const App: React.FC = () => {
           <span className="text-[10px] font-medium">Venta</span>
         </button>
         <button 
-          onClick={() => setCurrentView('inventory')}
-          className={`flex flex-col items-center gap-1 ${currentView === 'inventory' ? 'text-primary' : 'text-gray-500'}`}
+          onClick={() => setCurrentView('orders')}
+          className={`flex flex-col items-center gap-1 ${currentView === 'orders' ? 'text-primary' : 'text-gray-500'} relative`}
         >
-          <Box size={20} strokeWidth={currentView === 'inventory' ? 2.5 : 2} />
-          <span className="text-[10px] font-medium">Stock</span>
+          <div className="relative">
+             <ChefHat size={20} strokeWidth={currentView === 'orders' ? 2.5 : 2} />
+             {pendingOrdersCount > 0 && (
+                <span className="absolute -top-2 -right-2 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-red-500 text-[8px] font-bold text-white border border-dark-950">
+                  {pendingOrdersCount}
+                </span>
+              )}
+          </div>
+          <span className="text-[10px] font-medium">Pedidos</span>
         </button>
         <button 
           onClick={() => setCurrentView('stats')}
           className={`flex flex-col items-center gap-1 ${currentView === 'stats' ? 'text-primary' : 'text-gray-500'}`}
         >
           <BarChart3 size={20} strokeWidth={currentView === 'stats' ? 2.5 : 2} />
-          <span className="text-[10px] font-medium">Stats</span>
+          <span className="text-[10px] font-medium">Cierre</span>
         </button>
       </nav>
     </div>

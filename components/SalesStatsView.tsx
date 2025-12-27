@@ -1,7 +1,8 @@
+
 import React, { useMemo, useState } from 'react';
 import { Sale, PaymentMethod, Expense, ExpenseCategory } from '../types';
-import { formatCurrency } from '../utils/currency';
-import { TrendingUp, TrendingDown, Calendar, Clock, CreditCard, Banknote, Smartphone, Filter, XCircle, Plus, Receipt, AlertTriangle, Trash2, X, DollarSign, ArrowRightLeft } from 'lucide-react';
+import { formatCurrency, formatVES } from '../utils/currency';
+import { TrendingUp, TrendingDown, Calendar, Clock, CreditCard, Banknote, Smartphone, Filter, XCircle, Plus, Receipt, AlertTriangle, Trash2, X, DollarSign, ArrowRightLeft, Wallet } from 'lucide-react';
 
 interface SalesStatsViewProps {
   sales: Sale[];
@@ -15,8 +16,8 @@ type Tab = 'sales' | 'expenses';
 
 const SalesStatsView: React.FC<SalesStatsViewProps> = ({ sales, expenses, onAddExpense, onDeleteExpense, exchangeRate }) => {
   // Date Filter State
-  const [startDate, setStartDate] = useState<string>('');
-  const [endDate, setEndDate] = useState<string>('');
+  const [startDate, setStartDate] = useState<string>(new Date().toISOString().split('T')[0]); // Default to today
+  const [endDate, setEndDate] = useState<string>(new Date().toISOString().split('T')[0]); // Default to today
   const [activeTab, setActiveTab] = useState<Tab>('sales');
   
   // Expense Modal State
@@ -59,6 +60,32 @@ const SalesStatsView: React.FC<SalesStatsViewProps> = ({ sales, expenses, onAddE
     return { totalRevenue, totalExpenses, netProfit };
   }, [filteredSales, filteredExpenses]);
 
+  // --- Cierre de Caja (Cash Cut) Logic ---
+  const cashCut = useMemo(() => {
+    let usdCash = 0;
+    let usdZelle = 0;
+    let vesMobile = 0;
+    let vesCard = 0;
+
+    filteredSales.forEach(sale => {
+      if (sale.paymentMethod === 'cash') usdCash += sale.total;
+      if (sale.paymentMethod === 'zelle') usdZelle += sale.total;
+      
+      // For VES payments, we should technically use the rate at time of sale for historical accuracy, 
+      // or current rate if we are just reconciling counts. 
+      // Let's use the stored rate on the sale to know exactly how many VES were charged at that moment.
+      if (sale.paymentMethod === 'mobile') vesMobile += (sale.total * sale.exchangeRate);
+      if (sale.paymentMethod === 'card') vesCard += (sale.total * sale.exchangeRate);
+    });
+
+    // Subtract Cash Expenses from Cash USD (Assuming expenses are paid in Cash usually, 
+    // or we could add a payment method to expenses, but keeping it simple for now).
+    // Let's just show total sales per method for reconciliation.
+    
+    return { usdCash, usdZelle, vesMobile, vesCard };
+  }, [filteredSales]);
+
+
   // --- Sorters ---
   const sortedSales = [...filteredSales].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
   const sortedExpenses = [...filteredExpenses].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
@@ -99,6 +126,7 @@ const SalesStatsView: React.FC<SalesStatsViewProps> = ({ sales, expenses, onAddE
     switch (method) {
       case 'card': return <CreditCard size={14} />;
       case 'mobile': return <Smartphone size={14} />;
+      case 'zelle': return <DollarSign size={14} />;
       case 'cash': default: return <Banknote size={14} />;
     }
   };
@@ -109,8 +137,8 @@ const SalesStatsView: React.FC<SalesStatsViewProps> = ({ sales, expenses, onAddE
       {/* Header with Filters */}
       <header className="flex flex-col md:flex-row md:items-center justify-between border-b border-dark-800 bg-dark-950/95 px-4 py-3 md:px-6 md:py-5 gap-4">
         <div>
-          <h1 className="text-lg font-bold text-white">Finanzas</h1>
-          <p className="text-[10px] text-gray-500 uppercase tracking-wider font-semibold">Balance General</p>
+          <h1 className="text-lg font-bold text-white">Finanzas & Cierre</h1>
+          <p className="text-[10px] text-gray-500 uppercase tracking-wider font-semibold">Balance y Arqueo</p>
         </div>
 
         <div className="flex items-center gap-2 bg-dark-900 p-1.5 rounded-xl border border-dark-800 overflow-x-auto">
@@ -144,18 +172,45 @@ const SalesStatsView: React.FC<SalesStatsViewProps> = ({ sales, expenses, onAddE
 
       <div className="flex-1 overflow-y-auto p-4 md:p-6 scrollbar-hide">
         
-        {/* Financial Summary Cards */}
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3 mb-6">
+        {/* CASH CUT SUMMARY (ARQUEO DE CAJA) */}
+        <div className="mb-8">
+           <h3 className="text-white text-sm font-bold mb-3 flex items-center gap-2">
+             <Wallet size={16} className="text-primary"/> Resumen por Método de Pago
+           </h3>
+           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              <div className="bg-dark-900 border border-dark-800 p-3 rounded-xl">
+                 <span className="text-xs text-gray-500 block mb-1">Efectivo (USD)</span>
+                 <span className="text-xl font-bold text-green-400">{formatCurrency(cashCut.usdCash)}</span>
+              </div>
+              <div className="bg-dark-900 border border-dark-800 p-3 rounded-xl">
+                 <span className="text-xs text-gray-500 block mb-1">Zelle (USD)</span>
+                 <span className="text-xl font-bold text-blue-400">{formatCurrency(cashCut.usdZelle)}</span>
+              </div>
+              <div className="bg-dark-900 border border-dark-800 p-3 rounded-xl">
+                 <span className="text-xs text-gray-500 block mb-1">Pago Móvil (VES)</span>
+                 <span className="text-xl font-bold text-yellow-400">{formatVES(cashCut.vesMobile)}</span>
+              </div>
+              <div className="bg-dark-900 border border-dark-800 p-3 rounded-xl">
+                 <span className="text-xs text-gray-500 block mb-1">Punto de Venta (VES)</span>
+                 <span className="text-xl font-bold text-purple-400">{formatVES(cashCut.vesCard)}</span>
+              </div>
+           </div>
+        </div>
+
+        {/* Global Stats */}
+        <h3 className="text-white text-sm font-bold mb-3 flex items-center gap-2">
+           <TrendingUp size={16} className="text-primary"/> Totales Generales
+        </h3>
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3 mb-8">
           {/* Income */}
           <div className="rounded-xl bg-dark-900 border border-dark-800 p-5 shadow-lg relative overflow-hidden group">
             <div className="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity">
               <TrendingUp size={48} className="text-emerald-500" />
             </div>
             <div className="flex items-center gap-2 mb-2">
-              <span className="text-xs font-bold uppercase tracking-wider text-emerald-500 bg-emerald-500/10 px-2 py-0.5 rounded">Ingresos</span>
+              <span className="text-xs font-bold uppercase tracking-wider text-emerald-500 bg-emerald-500/10 px-2 py-0.5 rounded">Ventas Totales</span>
             </div>
             <p className="text-2xl font-bold text-white tracking-tight">{formatCurrency(stats.totalRevenue)}</p>
-            <p className="text-[10px] text-gray-500 mt-1">Total Ventas</p>
           </div>
 
           {/* Expenses */}
@@ -167,7 +222,6 @@ const SalesStatsView: React.FC<SalesStatsViewProps> = ({ sales, expenses, onAddE
               <span className="text-xs font-bold uppercase tracking-wider text-red-500 bg-red-500/10 px-2 py-0.5 rounded">Gastos / Pérdidas</span>
             </div>
             <p className="text-2xl font-bold text-white tracking-tight">{formatCurrency(stats.totalExpenses)}</p>
-            <p className="text-[10px] text-gray-500 mt-1">Total Egresos</p>
           </div>
 
           {/* Net Profit */}
@@ -178,7 +232,6 @@ const SalesStatsView: React.FC<SalesStatsViewProps> = ({ sales, expenses, onAddE
                 <span className="text-xs font-bold uppercase tracking-wider text-white/90 border border-white/20 px-2 py-0.5 rounded">Ganancia Neta</span>
               </div>
               <p className="text-3xl font-bold text-white tracking-tight">{formatCurrency(stats.netProfit)}</p>
-              <p className="text-[10px] text-white/70 mt-1">Ingresos - Gastos</p>
             </div>
           </div>
         </div>
@@ -226,10 +279,13 @@ const SalesStatsView: React.FC<SalesStatsViewProps> = ({ sales, expenses, onAddE
                   <div key={sale.id} className="flex flex-col md:flex-row md:items-center justify-between gap-4 rounded-xl bg-dark-900 border border-dark-800 p-4 hover:border-dark-700 transition-colors">
                      <div className="flex items-center gap-4">
                         <div className="flex flex-col items-center justify-center rounded-lg bg-dark-800 p-2 w-12 h-12">
-                          <span className="text-[10px] font-bold uppercase text-gray-400">{dateObj.toLocaleDateString('es-ES', { month: 'short' })}</span>
-                          <span className="text-lg font-bold text-white leading-none">{dateObj.getDate()}</span>
+                          <span className="text-[10px] font-bold uppercase text-gray-400">#{sale.orderNumber}</span>
+                          <span className="text-xs font-bold text-white leading-none text-center">Ord</span>
                         </div>
                         <div>
+                          <div className="flex items-center gap-2 text-sm font-bold text-white mb-0.5">
+                             {sale.customerName}
+                          </div>
                           <div className="flex items-center gap-2 text-xs text-gray-400 mb-1">
                             <Clock size={12} /> {dateObj.toLocaleTimeString('es-ES', {hour: '2-digit', minute:'2-digit'})}
                           </div>
