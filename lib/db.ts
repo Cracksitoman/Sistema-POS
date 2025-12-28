@@ -1,87 +1,61 @@
 
-import { supabase, isSupabaseConfigured } from './supabase';
-import { Product, Sale, Expense, OrderStatus } from '../types';
+import { Product, Sale, Expense } from '../types';
 
-export const db = {
-  // Verificación de conexión simple
-  init: async () => {
-    // Si no está configurado, fallar silenciosamente para modo offline
-    if (!isSupabaseConfigured) return false;
+export interface BackupData {
+  version: number;
+  timestamp: string;
+  products: Product[];
+  sales: Sale[];
+  expenses: Expense[];
+  exchangeRate: number;
+}
 
-    try {
-      const { error } = await supabase.from('products').select('count', { count: 'exact', head: true });
-      if (error) throw error;
-      return true;
-    } catch (e: any) {
-      // Loggear el mensaje específico en lugar del objeto genérico
-      console.warn("Offline Mode - Supabase connection failed:", e.message || e);
-      return false;
-    }
-  },
-
-  // Obtener todos los datos iniciales
-  getAll: async () => {
-    if (!isSupabaseConfigured) return { products: [], sales: [], expenses: [] };
-
-    const [productsRes, salesRes, expensesRes] = await Promise.all([
-      supabase.from('products').select('*'),
-      supabase.from('sales').select('*').order('date', { ascending: false }),
-      supabase.from('expenses').select('*').order('date', { ascending: false })
-    ]);
-
-    if (productsRes.error) console.error("Error fetching products:", productsRes.error.message);
-    if (salesRes.error) console.error("Error fetching sales:", salesRes.error.message);
-    if (expensesRes.error) console.error("Error fetching expenses:", expensesRes.error.message);
-
-    return {
-      products: productsRes.data || [],
-      sales: salesRes.data || [],
-      expenses: expensesRes.data || []
+export const LocalDB = {
+  // Generar archivo JSON para descargar
+  exportData: (products: Product[], sales: Sale[], expenses: Expense[], exchangeRate: number) => {
+    const data: BackupData = {
+      version: 1,
+      timestamp: new Date().toISOString(),
+      products,
+      sales,
+      expenses,
+      exchangeRate
     };
+
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `fastpos_respaldo_${new Date().toISOString().split('T')[0]}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   },
 
-  // --- Ventas ---
-  saveSale: async (sale: Sale) => {
-    if (!isSupabaseConfigured) return;
-    const { error } = await supabase.from('sales').insert(sale);
-    if (error) console.error("Error saving sale:", error.message);
-  },
-
-  updateSaleStatus: async (id: string, status: OrderStatus) => {
-    if (!isSupabaseConfigured) return;
-    const { error } = await supabase.from('sales').update({ status }).eq('id', id);
-    if (error) console.error("Error updating sale status:", error.message);
-  },
-
-  // --- Productos ---
-  addProduct: async (product: Product) => {
-    if (!isSupabaseConfigured) return;
-    const { error } = await supabase.from('products').insert(product);
-    if (error) console.error("Error adding product:", error.message);
-  },
-
-  updateProduct: async (product: Product) => {
-    if (!isSupabaseConfigured) return;
-    const { error } = await supabase.from('products').update(product).eq('id', product.id);
-    if (error) console.error("Error updating product:", error.message);
-  },
-
-  deleteProduct: async (id: string) => {
-    if (!isSupabaseConfigured) return;
-    const { error } = await supabase.from('products').delete().eq('id', id);
-    if (error) console.error("Error deleting product:", error.message);
-  },
-
-  // --- Gastos ---
-  addExpense: async (expense: Expense) => {
-    if (!isSupabaseConfigured) return;
-    const { error } = await supabase.from('expenses').insert(expense);
-    if (error) console.error("Error adding expense:", error.message);
-  },
-
-  deleteExpense: async (id: string) => {
-    if (!isSupabaseConfigured) return;
-    const { error } = await supabase.from('expenses').delete().eq('id', id);
-    if (error) console.error("Error deleting expense:", error.message);
+  // Leer archivo JSON subido por el usuario
+  importData: (file: File): Promise<BackupData> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      
+      reader.onload = (event) => {
+        try {
+          const json = JSON.parse(event.target?.result as string);
+          
+          // Validación básica
+          if (!json.products || !json.sales) {
+            throw new Error("El archivo no tiene el formato correcto.");
+          }
+          
+          resolve(json);
+        } catch (err) {
+          reject(err);
+        }
+      };
+      
+      reader.onerror = () => reject(new Error("Error leyendo el archivo"));
+      reader.readAsText(file);
+    });
   }
 };

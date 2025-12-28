@@ -1,8 +1,8 @@
 
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useState, useRef } from 'react';
 import { Sale, PaymentMethod, Expense, ExpenseCategory } from '../types';
 import { formatCurrency, formatVES } from '../utils/currency';
-import { TrendingUp, TrendingDown, Clock, CreditCard, Banknote, Smartphone, Filter, XCircle, Plus, Receipt, AlertTriangle, Trash2, X, DollarSign, ArrowRightLeft, Wallet } from 'lucide-react';
+import { TrendingUp, TrendingDown, Clock, CreditCard, Banknote, Smartphone, Filter, XCircle, Plus, Receipt, AlertTriangle, Trash2, X, DollarSign, ArrowRightLeft, Wallet, Download, Upload, HardDrive } from 'lucide-react';
 
 interface SalesStatsViewProps {
   sales: Sale[];
@@ -10,16 +10,20 @@ interface SalesStatsViewProps {
   onAddExpense: (expense: Omit<Expense, 'id' | 'date'>) => void;
   onDeleteExpense: (id: string) => void;
   exchangeRate: number;
+  onExport: () => void;
+  onImport: (file: File) => void;
 }
 
-type Tab = 'sales' | 'expenses';
+type Tab = 'sales' | 'expenses' | 'backup';
 
-const SalesStatsView: React.FC<SalesStatsViewProps> = ({ sales, expenses, onAddExpense, onDeleteExpense, exchangeRate }) => {
+const SalesStatsView: React.FC<SalesStatsViewProps> = ({ sales, expenses, onAddExpense, onDeleteExpense, exchangeRate, onExport, onImport }) => {
   const [startDate, setStartDate] = useState<string>(new Date().toISOString().split('T')[0]);
   const [endDate, setEndDate] = useState<string>(new Date().toISOString().split('T')[0]);
   const [activeTab, setActiveTab] = useState<Tab>('sales');
   const [isExpenseModalOpen, setIsExpenseModalOpen] = useState(false);
   const [expenseForm, setExpenseForm] = useState({ amountUSD: '', amountVES: '', description: '', category: 'expense' as ExpenseCategory });
+  
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Filtrado robusto basado en strings YYYY-MM-DD para evitar errores de zona horaria
   const filteredSales = useMemo(() => {
@@ -66,16 +70,27 @@ const SalesStatsView: React.FC<SalesStatsViewProps> = ({ sales, expenses, onAddE
     setExpenseForm({ amountUSD: '', amountVES: '', description: '', category: 'expense' });
   };
 
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      onImport(file);
+    }
+    // Reset input
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
   return (
     <div className="flex h-full w-full flex-col bg-dark-950">
       <header className="flex flex-col md:flex-row md:items-center justify-between border-b border-dark-800 bg-dark-950 px-4 py-3 md:px-6 md:py-5 gap-4">
-        <div><h1 className="text-lg font-bold text-white">Cierre de Caja</h1><p className="text-[10px] text-gray-500 uppercase font-semibold">Resumen Diario</p></div>
+        <div><h1 className="text-lg font-bold text-white">Cierre y Gestión</h1><p className="text-[10px] text-gray-500 uppercase font-semibold">Finanzas y Respaldo</p></div>
         <div className="flex items-center gap-2 bg-dark-900 p-1.5 rounded-xl border border-dark-800">
           <Filter size={14} className="text-gray-500 ml-2" /><input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} className="bg-transparent border-none text-xs text-white outline-none" /><span className="text-gray-600">-</span><input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} className="bg-transparent border-none text-xs text-white outline-none" />
         </div>
       </header>
 
       <div className="flex-1 overflow-y-auto p-4 md:p-6 scrollbar-hide">
+        
+        {/* Resumen Cards */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-8">
           <div className="bg-dark-900 border border-dark-800 p-4 rounded-xl"><span className="text-[10px] text-gray-500 uppercase font-bold">Efectivo USD</span><p className="text-xl font-black text-emerald-400 mt-1">{formatCurrency(cashCut.usdCash)}</p></div>
           <div className="bg-dark-900 border border-dark-800 p-4 rounded-xl"><span className="text-[10px] text-gray-500 uppercase font-bold">Zelle USD</span><p className="text-xl font-black text-blue-400 mt-1">{formatCurrency(cashCut.usdZelle)}</p></div>
@@ -89,14 +104,17 @@ const SalesStatsView: React.FC<SalesStatsViewProps> = ({ sales, expenses, onAddE
           <div className="bg-primary p-5 rounded-2xl shadow-lg shadow-primary/10"><Wallet className="text-white mb-2" size={24} /><span className="text-xs text-white/70">Ganancia Neta</span><p className="text-2xl font-black text-white">{formatCurrency(stats.netProfit)}</p></div>
         </div>
 
-        <div className="flex border-b border-dark-800 mb-4 gap-4">
-          <button onClick={() => setActiveTab('sales')} className={`pb-2 text-sm font-bold ${activeTab === 'sales' ? 'text-primary border-b-2 border-primary' : 'text-gray-500'}`}>Ventas ({filteredSales.length})</button>
-          <button onClick={() => setActiveTab('expenses')} className={`pb-2 text-sm font-bold ${activeTab === 'expenses' ? 'text-primary border-b-2 border-primary' : 'text-gray-500'}`}>Gastos ({filteredExpenses.length})</button>
+        {/* Tabs */}
+        <div className="flex border-b border-dark-800 mb-4 gap-4 overflow-x-auto">
+          <button onClick={() => setActiveTab('sales')} className={`pb-2 text-sm font-bold whitespace-nowrap ${activeTab === 'sales' ? 'text-primary border-b-2 border-primary' : 'text-gray-500'}`}>Ventas ({filteredSales.length})</button>
+          <button onClick={() => setActiveTab('expenses')} className={`pb-2 text-sm font-bold whitespace-nowrap ${activeTab === 'expenses' ? 'text-primary border-b-2 border-primary' : 'text-gray-500'}`}>Gastos ({filteredExpenses.length})</button>
+          <button onClick={() => setActiveTab('backup')} className={`pb-2 text-sm font-bold whitespace-nowrap ${activeTab === 'backup' ? 'text-primary border-b-2 border-primary' : 'text-gray-500'}`}>Copia de Seguridad</button>
+          
           {activeTab === 'expenses' && <button onClick={() => setIsExpenseModalOpen(true)} className="ml-auto flex items-center gap-1 bg-red-600 text-white text-[10px] px-2 py-1 rounded-lg font-bold"><Plus size={12} /> Registrar Salida</button>}
         </div>
 
         <div className="space-y-3">
-          {activeTab === 'sales' ? (
+          {activeTab === 'sales' && (
             filteredSales.length === 0 ? <p className="text-center text-gray-600 py-10">No hay ventas registradas en este periodo.</p> :
             filteredSales.map(s => (
               <div key={s.id} className="flex items-center justify-between bg-dark-900 border border-dark-800 p-4 rounded-xl">
@@ -107,13 +125,54 @@ const SalesStatsView: React.FC<SalesStatsViewProps> = ({ sales, expenses, onAddE
                 <div className="text-right"><p className="text-lg font-bold text-white">{formatCurrency(s.total)}</p><span className="text-[8px] uppercase font-bold text-primary bg-primary/10 px-1.5 py-0.5 rounded">{s.paymentMethod}</span></div>
               </div>
             ))
-          ) : (
+          )}
+
+          {activeTab === 'expenses' && (
             filteredExpenses.map(e => (
               <div key={e.id} className="flex items-center justify-between bg-dark-900 border border-dark-800 p-4 rounded-xl">
                 <div className="flex items-center gap-3"><div className="bg-red-500/10 p-2 rounded-lg text-red-500"><Receipt size={18} /></div><div><p className="text-sm font-bold text-white">{e.description}</p><p className="text-[10px] text-gray-500 uppercase">{e.category}</p></div></div>
                 <div className="flex items-center gap-4"><p className="text-lg font-bold text-red-500">-{formatCurrency(e.amount)}</p><button onClick={() => onDeleteExpense(e.id)} className="p-2 text-gray-600 hover:text-red-500"><Trash2 size={16} /></button></div>
               </div>
             ))
+          )}
+
+          {activeTab === 'backup' && (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+               {/* Export Card */}
+               <div className="bg-dark-900 border border-dark-800 rounded-2xl p-6 flex flex-col items-center text-center">
+                  <div className="h-14 w-14 bg-emerald-500/10 text-emerald-500 rounded-full flex items-center justify-center mb-4">
+                     <Download size={28} />
+                  </div>
+                  <h3 className="text-white font-bold text-lg mb-2">Descargar Respaldo</h3>
+                  <p className="text-gray-400 text-sm mb-6 max-w-xs">
+                     Guarda todos tus datos (ventas, productos, configuración) en un archivo seguro en tu dispositivo.
+                  </p>
+                  <button onClick={onExport} className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-3 rounded-xl transition-all flex items-center justify-center gap-2">
+                     <HardDrive size={18} /> Guardar Datos
+                  </button>
+               </div>
+
+               {/* Import Card */}
+               <div className="bg-dark-900 border border-dark-800 rounded-2xl p-6 flex flex-col items-center text-center">
+                  <div className="h-14 w-14 bg-blue-500/10 text-blue-500 rounded-full flex items-center justify-center mb-4">
+                     <Upload size={28} />
+                  </div>
+                  <h3 className="text-white font-bold text-lg mb-2">Restaurar Copia</h3>
+                  <p className="text-gray-400 text-sm mb-6 max-w-xs">
+                     Carga un archivo de respaldo previamente guardado. <br/><span className="text-red-400 font-bold text-xs">¡Atención! Esto reemplazará los datos actuales.</span>
+                  </p>
+                  <button onClick={() => fileInputRef.current?.click()} className="w-full bg-dark-800 hover:bg-dark-700 text-white font-bold py-3 rounded-xl transition-all flex items-center justify-center gap-2 border border-dark-700">
+                     <Upload size={18} /> Cargar Archivo
+                  </button>
+                  <input 
+                    type="file" 
+                    ref={fileInputRef} 
+                    className="hidden" 
+                    accept=".json" 
+                    onChange={handleFileChange}
+                  />
+               </div>
+            </div>
           )}
         </div>
       </div>
